@@ -5,6 +5,7 @@ var rewire = require('rewire');
 var Transport = rewire('../../../modules/transport');
 var Broadcaster = rewire('../../../logic/broadcaster');
 var jobsQueue = require('../../../helpers/jobsQueue');
+var constants = require('../../../helpers/constants');
 
 describe('modules/transport', function () {
 	var sandbox, callback, instance, __private, scope, cb1;
@@ -425,6 +426,85 @@ describe('modules/transport', function () {
 				'Received transaction 1 from peer undefined'
 			);
 			expect(__private.removePeer.called).to.be.false;
+		});
+	});
+
+	describe('headers()', function () {
+		it('success', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			var result = instance.headers(123);
+			expect(result).to.equal(123);
+			expect(__private.headers).to.equal(123);
+		});
+	});
+
+	describe('consensus()', function () {
+		it('if scope.config.forging.force is true should returns undefined', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			var result = instance.consensus();
+			expect(result).to.be.a('undefined');
+		});
+
+		it('if scope.config.forging.force is true should returns 100', function () {
+			var dummyScope = JSON.parse(JSON.stringify(scope));
+			dummyScope.config.forging.force = false;
+			dummyScope.system.headers = function () {};
+			instance = new Transport(cb1, dummyScope);
+			instance.onBind(dummyScope);
+			var result = instance.consensus();
+			expect(result).to.equal(100);
+		});
+	});
+
+	describe('poorConsensus()', function () {
+		it('if consensus is undefined should returns false', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			var result = instance.poorConsensus();
+			expect(result).to.be.false;
+		});
+
+		it('if consensus is less than minBroadhashConsensus should returns true', function () {
+			var dummyScope = JSON.parse(JSON.stringify(scope));
+			dummyScope.config.forging.force = false;
+			dummyScope.system.headers = function () {};
+			instance = new Transport(cb1, dummyScope);
+			instance.onBind(dummyScope);
+			var minBroadhashConsensus_original = constants.minBroadhashConsensus;
+			constants.minBroadhashConsensus = 101;
+			var result = instance.poorConsensus();
+			expect(result).to.be.true;
+			constants.minBroadhashConsensus = minBroadhashConsensus_original;
+		});
+
+		it('if consensus is greater than minBroadhashConsensus should returns false', function () {
+			var dummyScope = JSON.parse(JSON.stringify(scope));
+			dummyScope.config.forging.force = false;
+			dummyScope.system.headers = function () {};
+			instance = new Transport(cb1, dummyScope);
+			instance.onBind(dummyScope);
+			var result = instance.poorConsensus();
+			expect(result).to.be.false;
+		});
+	});
+
+	describe('getPeers()', function () {
+		it('success', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			sandbox
+				.stub(__private.broadcaster, 'getPeers')
+				.callsFake(function (params, cb) {
+					setImmediate(cb);
+				});
+			instance.getPeers(123, callback);
+			sandbox.clock.runAll();
+			expect(__private.broadcaster.getPeers.calledOnce).to.be.true;
+			expect(__private.broadcaster.getPeers.args[0][0]).to.equal(123);
+			expect(__private.broadcaster.getPeers.args[0][1]).to.be.a('function');
+			expect(callback.calledOnce).to.be.true;
 		});
 	});
 });
