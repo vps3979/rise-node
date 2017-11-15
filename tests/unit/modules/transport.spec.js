@@ -30,7 +30,9 @@ describe('modules/transport', function () {
 				validate: function () {}
 			},
 			network: 5,
-			balancesSequence: 6,
+			balancesSequence: {
+				add: function () {}
+			},
 			logic: {
 				block: 7,
 				transaction: {
@@ -57,7 +59,9 @@ describe('modules/transport', function () {
 			multisignatures: {
 				processSignature: function () {}
 			},
-			transactions: 17,
+			transactions: {
+				processUnconfirmedTransaction: function () {}
+			},
 			system: {
 				headers: function () {}
 			},
@@ -70,6 +74,8 @@ describe('modules/transport', function () {
 		sandbox.stub(scope.schema, 'validate');
 		sandbox.stub(scope.multisignatures, 'processSignature');
 		sandbox.stub(scope.logic.transaction, 'objectNormalize');
+		sandbox.stub(scope.balancesSequence, 'add');
+		sandbox.stub(scope.transactions, 'processUnconfirmedTransaction');
 		sandbox.stub(jobsQueue, 'register').returns(true);
 		Broadcaster.__set__('jobsQueue', jobsQueue);
 		Transport.__set__('setImmediate', setImmediate);
@@ -345,6 +351,80 @@ describe('modules/transport', function () {
 				code: 'ETRANSACTION'
 			});
 			expect(__private.removePeer.args[0][1]).to.equal(extraLogMessage);
+		});
+
+		it('processUnconfirmedTransaction() returns an error', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			var transaction = { id: 1 };
+			var peer = 2;
+			var extraLogMessage = 3;
+			scope.logic.transaction.objectNormalize.callsFake(function (transaction) {
+				return transaction;
+			});
+			scope.balancesSequence.add.callsFake(function (cb) {
+				setImmediate(cb, callback);
+			});
+			scope.transactions.processUnconfirmedTransaction.callsFake(function (
+				transaction,
+				foo,
+				cb
+			) {
+				setImmediate(cb, new Error('processUnconfirmedTransactionError'));
+			});
+			__private.receiveTransaction(
+				transaction,
+				peer,
+				extraLogMessage,
+				callback
+			);
+			sandbox.clock.runAll();
+			expect(callback.calledOnce).to.be.true;
+			expect(callback.args[0][0]).to.have.string(
+				'processUnconfirmedTransactionError'
+			);
+			expect(scope.logger.debug.calledThrice).to.be.true;
+			expect(scope.logger.debug.args[0][0]).to.have.string(
+				'Received transaction 1 from peer undefined'
+			);
+			expect(scope.logger.debug.args[1][0]).to.have.string('Transaction');
+			expect(scope.logger.debug.args[2][0]).to.have.string('Transaction');
+			expect(__private.removePeer.called).to.be.false;
+		});
+
+		it('success', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			var transaction = { id: 1 };
+			var peer = 2;
+			var extraLogMessage = 3;
+			scope.logic.transaction.objectNormalize.callsFake(function (transaction) {
+				return transaction;
+			});
+			scope.balancesSequence.add.callsFake(function (cb) {
+				setImmediate(cb, callback);
+			});
+			scope.transactions.processUnconfirmedTransaction.callsFake(function (
+				transaction,
+				foo,
+				cb
+			) {
+				setImmediate(cb);
+			});
+			__private.receiveTransaction(
+				transaction,
+				peer,
+				extraLogMessage,
+				callback
+			);
+			sandbox.clock.runAll();
+			expect(callback.calledOnce).to.be.true;
+			expect(callback.args[0][0]).to.be.null;
+			expect(scope.logger.debug.calledOnce).to.be.true;
+			expect(scope.logger.debug.args[0][0]).to.have.string(
+				'Received transaction 1 from peer undefined'
+			);
+			expect(__private.removePeer.called).to.be.false;
 		});
 	});
 });
