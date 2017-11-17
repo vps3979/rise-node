@@ -6,6 +6,7 @@ var Transport = rewire('../../../modules/transport');
 var Broadcaster = rewire('../../../logic/broadcaster');
 var jobsQueue = require('../../../helpers/jobsQueue');
 var constants = require('../../../helpers/constants');
+var nock = rewire('nock');
 
 describe('modules/transport', function () {
 	var sandbox, callback, instance, __private, scope, cb1;
@@ -39,7 +40,9 @@ describe('modules/transport', function () {
 				transaction: {
 					objectNormalize: function (transaction) {}
 				},
-				peers: 9
+				peers: {
+					create: function (peer) {}
+				}
 			},
 			config: {
 				broadcasts: { peerLimit: 10 },
@@ -56,9 +59,7 @@ describe('modules/transport', function () {
 			dapps: 14,
 			peers: {
 				remove: function () {},
-				list: function () {
-
-				}
+				list: function () {}
 			},
 			multisignatures: {
 				processSignature: function () {}
@@ -81,6 +82,7 @@ describe('modules/transport', function () {
 		sandbox.stub(scope.logic.transaction, 'objectNormalize');
 		sandbox.stub(scope.balancesSequence, 'add');
 		sandbox.stub(scope.transactions, 'processUnconfirmedTransaction');
+		sandbox.stub(scope.logic.peers, 'create');
 		sandbox.stub(jobsQueue, 'register').returns(true);
 		Broadcaster.__set__('jobsQueue', jobsQueue);
 		Transport.__set__('setImmediate', setImmediate);
@@ -541,17 +543,46 @@ describe('modules/transport', function () {
 			instance = new Transport(cb1, scope);
 			instance.onBind(scope);
 			scope.peers.list.callsFake(function (config, cb) {
-				setImmediate(cb, null, [1,2,3]);
+				setImmediate(cb, null, [1, 2, 3]);
 			});
-			sandbox.stub(instance, 'getFromPeer').callsFake(function (peer, options, cb) {
-				return setImmediate(cb);
-			});
+			sandbox
+				.stub(instance, 'getFromPeer')
+				.callsFake(function (peer, options, cb) {
+					return setImmediate(cb);
+				});
 			instance.getFromRandomPeer({}, callback);
 			sandbox.clock.runAll();
 			expect(callback.calledOnce).to.be.true;
 			expect(callback.args[0][0]).to.be.a('undefined');
 			expect(instance.getFromPeer.calledOnce).to.be.true;
 			expect(instance.getFromPeer.args[0][0]).to.equal(1);
+		});
+	});
+
+	describe('getFromPeer()', function (done) {
+		it('Received bad response code', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			var options = { api: '/foo', method: 'GET', data: '123' };
+			scope.logic.peers.create.callsFake(function (peer) {
+				return { ip: '127.0.0.1', port: 1234 };
+			});
+			sandbox.spy(__private, 'removePeer');
+
+			nock('http://127.0.0.1:1234')
+				.defaultReplyHeaders({
+					'Content-Type': 'application/json'
+				})
+				.get('/peer/foo')
+				.reply(404, { error: '404 Not found' });
+
+			instance.getFromPeer({}, options, callback);
+
+			sandbox.clock.runAll();
+
+			expect(__private.removePeer.calledOnce).to.be.true;
+			expect(callback.calledOnce).to.be.true;
+			expect(callback.args[0][0]).to.have.string('Received bad response code');
 		});
 	});
 });
