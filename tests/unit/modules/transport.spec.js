@@ -55,7 +55,10 @@ describe('modules/transport', function () {
 			blocks: 13,
 			dapps: 14,
 			peers: {
-				remove: function () {}
+				remove: function () {},
+				list: function () {
+
+				}
 			},
 			multisignatures: {
 				processSignature: function () {}
@@ -72,6 +75,7 @@ describe('modules/transport', function () {
 		sandbox.spy(scope.logger, 'log');
 		sandbox.spy(scope.logger, 'debug');
 		sandbox.spy(scope.peers, 'remove');
+		sandbox.stub(scope.peers, 'list');
 		sandbox.stub(scope.schema, 'validate');
 		sandbox.stub(scope.multisignatures, 'processSignature');
 		sandbox.stub(scope.logic.transaction, 'objectNormalize');
@@ -505,6 +509,49 @@ describe('modules/transport', function () {
 			expect(__private.broadcaster.getPeers.args[0][0]).to.equal(123);
 			expect(__private.broadcaster.getPeers.args[0][1]).to.be.a('function');
 			expect(callback.calledOnce).to.be.true;
+		});
+	});
+
+	describe('getFromRandomPeer()', function () {
+		it('modules.peers.list() returns error \'No acceptable peers found\'', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			scope.peers.list.callsFake(function (config, cb) {
+				setImmediate(cb, null, 0);
+			});
+			instance.getFromRandomPeer({}, callback);
+			sandbox.clock.runAll();
+			expect(callback.calledOnce).to.be.true;
+			expect(callback.args[0][0]).to.equal('No acceptable peers found');
+		});
+
+		it('modules.peers.list() returns other error', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			scope.peers.list.callsFake(function (config, cb) {
+				setImmediate(cb, 'otherError', 0);
+			});
+			instance.getFromRandomPeer({}, callback);
+			sandbox.clock.runAll();
+			expect(callback.calledOnce).to.be.true;
+			expect(callback.args[0][0]).to.equal('otherError');
+		});
+
+		it('Success', function () {
+			instance = new Transport(cb1, scope);
+			instance.onBind(scope);
+			scope.peers.list.callsFake(function (config, cb) {
+				setImmediate(cb, null, [1,2,3]);
+			});
+			sandbox.stub(instance, 'getFromPeer').callsFake(function (peer, options, cb) {
+				return setImmediate(cb);
+			});
+			instance.getFromRandomPeer({}, callback);
+			sandbox.clock.runAll();
+			expect(callback.calledOnce).to.be.true;
+			expect(callback.args[0][0]).to.be.a('undefined');
+			expect(instance.getFromPeer.calledOnce).to.be.true;
+			expect(instance.getFromPeer.args[0][0]).to.equal(1);
 		});
 	});
 });
