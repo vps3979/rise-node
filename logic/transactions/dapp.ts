@@ -24,9 +24,9 @@ export type DappAsset = {
 
 export class DappTransaction extends BaseTransactionType<DappAsset> {
 
-  public modules: { system: SystemModule };
-  private unconfirmedNames: { [name: string]: true };
-  private unconfirmedLinks: { [link: string]: true };
+    public modules: { system: SystemModule };
+    private unconfirmedNames: { [name: string]: true } = {};
+    private unconfirmedLinks: { [link: string]: true } = {};
   private dbTable  = 'dapps';
   private dbFields = [
     'type',
@@ -75,7 +75,7 @@ export class DappTransaction extends BaseTransactionType<DappAsset> {
     tmpBB.writeInt(tx.asset.dapp.category);
     tmpBB.flip();
 
-    return Buffer.concat([buffer, tmpBB as any]);
+    return Buffer.concat([buffer, tmpBB.toBuffer() as any]);
   }
 
   public async verify(tx: IBaseTransaction<DappAsset>, sender: any): Promise<void> {
@@ -171,7 +171,7 @@ export class DappTransaction extends BaseTransactionType<DappAsset> {
     });
   }
 
-  public applyUnconfirmed(tx: IBaseTransaction<DappAsset>, sender: any): Promise<void> {
+  public async applyUnconfirmed(tx: IBaseTransaction<DappAsset>, sender: any): Promise<void> {
     if (this.unconfirmedNames[tx.asset.dapp.name]) {
       throw new Error('Application name already exists');
     }
@@ -183,12 +183,12 @@ export class DappTransaction extends BaseTransactionType<DappAsset> {
       this.unconfirmedLinks[tx.asset.dapp.link] = true;
     }
     this.unconfirmedNames[tx.asset.dapp.name] = true;
-    return Promise.resolve();
+    return;
   }
 
   public undoUnconfirmed(tx: IBaseTransaction<DappAsset>, sender: any): Promise<void> {
     delete this.unconfirmedNames[tx.asset.dapp.name];
-    delete this.unconfirmedLinks[tx.asset.dapp.name];
+    delete this.unconfirmedLinks[tx.asset.dapp.link];
     return Promise.resolve();
   }
 

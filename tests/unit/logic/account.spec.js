@@ -330,31 +330,21 @@ describe("logic/account", function() {
                 query: sinon.stub(),
                 none: sinon.stub()
             },
-            library: {
-                logger: {
-                    error: sinon.stub()
-                }
-            },
-            genesisblock: {
-                block: {}
+            logger: {
+                error: sinon.stub()
             }
         };
         pgp = {
             QueryFile: function() {}
         };
-        //
         Account.__set__("pgp", pgp);
         callback = sinon.stub();
         accountCallback = sinon.stub();
-        account = new Account.AccountLogic(scope.db, scope.schema, scope.library.logger, accountCallback);
-        // new Account(scope.db, scope.schema, scope.library.logger, accountCallback);
-        // account = Account.__get__("self");
-        // console.log(account);
+        account = new Account.AccountLogic(scope);
     });
 
     afterEach(function() {
         clock.restore();
-        //
         Account.__set__("pgp", originalPgp);
     });
 
@@ -546,14 +536,6 @@ describe("logic/account", function() {
             ];
             expect(account.editable).to.deep.equal(editable);
         });
-
-        it("callback", function() {
-            clock.tick();
-            expect(accountCallback.calledOnce).to.be.true;
-            expect(accountCallback.getCall(0).args.length).to.equal(2);
-            expect(accountCallback.getCall(0).args[0]).to.be.null;
-            expect(accountCallback.getCall(0).args[1]).to.be.instanceof(Account.AccountLogic);
-        });
     });
 
     describe("account.createTables", function() {
@@ -584,9 +566,9 @@ describe("logic/account", function() {
                 expect(scope.db.query.getCall(0).args.length).to.equal(1);
                 expect(scope.db.query.getCall(0).args[0]).to.be.instanceof(pgp.QueryFile);
 
-                expect(scope.library.logger.error.calledOnce).to.be.true;
-                expect(scope.library.logger.error.getCall(0).args.length).to.equal(1);
-                expect(scope.library.logger.error.getCall(0).args[0]).to.equal(
+                expect(scope.logger.error.calledOnce).to.be.true;
+                expect(scope.logger.error.getCall(0).args.length).to.equal(1);
+                expect(scope.logger.error.getCall(0).args[0]).to.equal(
                     error.stack
                 );
 
@@ -650,9 +632,9 @@ describe("logic/account", function() {
                 expect(scope.db.query.getCall(0).args.length).to.equal(1);
                 expect(scope.db.query.getCall(0).args[0]).to.deep.equal(sqles.join(""));
 
-                expect(scope.library.logger.error.calledOnce).to.be.true;
-                expect(scope.library.logger.error.getCall(0).args.length).to.equal(1);
-                expect(scope.library.logger.error.getCall(0).args[0]).to.equal(
+                expect(scope.logger.error.calledOnce).to.be.true;
+                expect(scope.logger.error.getCall(0).args.length).to.equal(1);
+                expect(scope.logger.error.getCall(0).args[0]).to.equal(
                     error.stack
                 );
 
@@ -907,9 +889,9 @@ describe("logic/account", function() {
                     p1: "2841811297332056155r"
                 });
 
-                expect(scope.library.logger.error.calledOnce).to.be.true;
-                expect(scope.library.logger.error.getCall(0).args.length).to.equal(1);
-                expect(scope.library.logger.error.getCall(0).args[0]).to.equal(
+                expect(scope.logger.error.calledOnce).to.be.true;
+                expect(scope.logger.error.getCall(0).args.length).to.equal(1);
+                expect(scope.logger.error.getCall(0).args[0]).to.equal(
                     error.stack
                 );
 
@@ -956,9 +938,9 @@ describe("logic/account", function() {
                     p1: "2841811297332056155r"
                 });
 
-                expect(scope.library.logger.error.calledOnce).to.be.true;
-                expect(scope.library.logger.error.getCall(0).args.length).to.equal(1);
-                expect(scope.library.logger.error.getCall(0).args[0]).to.equal(
+                expect(scope.logger.error.calledOnce).to.be.true;
+                expect(scope.logger.error.getCall(0).args.length).to.equal(1);
+                expect(scope.logger.error.getCall(0).args[0]).to.equal(
                     error.stack
                 );
 
@@ -1138,9 +1120,10 @@ describe("logic/account", function() {
                     expect(scope.db.none.calledOnce).to.be.true;
                     expect(scope.db.none.getCall(0).args.length).to.equal(1);
                     expect(scope.db.none.getCall(0).args[0]).to.equal(queries);
-                    expect(scope.library.logger.error.calledOnce).to.be.true;
-                    expect(scope.library.logger.error.getCall(0).args.length).to.equal(1);
-                    expect(scope.library.logger.error.getCall(0).args[0]).to.equal(
+
+                    expect(scope.logger.error.calledOnce).to.be.true;
+                    expect(scope.logger.error.getCall(0).args.length).to.equal(1);
+                    expect(scope.logger.error.getCall(0).args[0]).to.equal(
                         error.stack
                     );
 
@@ -1186,9 +1169,9 @@ describe("logic/account", function() {
                 expect(scope.db.none.getCall(0).args[0]).to.equal(queries);
                 expect(scope.db.none.getCall(0).args[1]).to.deep.equal(values);
 
-                expect(scope.library.logger.error.calledOnce).to.be.true;
-                expect(scope.library.logger.error.getCall(0).args.length).to.equal(1);
-                expect(scope.library.logger.error.getCall(0).args[0]).to.equal(
+                expect(scope.logger.error.calledOnce).to.be.true;
+                expect(scope.logger.error.getCall(0).args.length).to.equal(1);
+                expect(scope.logger.error.getCall(0).args[0]).to.equal(
                     error.stack
                 );
 
