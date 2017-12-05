@@ -4,16 +4,20 @@ chai.use(assertArrays);
 var expect = chai.expect;
 var sinon = require("sinon");
 var rewire = require("rewire");
-// var Block = rewire("../../../logic/block");
-var Block = rewire("../../../logic/block.ts");
-
 var ByteBuffer = require("bytebuffer");
-var Ed = require("../../../helpers/ed.ts").Ed;
-var ed = new Ed;
-var zSchema = require("../../../helpers/z_schema").z_schema;
-var schema = new zSchema();
-var transaction = require("../../../logic/transaction");
 var crypto = require("crypto");
+var path = require("path");
+
+var rootDir = path.join(__dirname, "../../..");
+
+// var Block = rewire("../../../logic/block");
+var Block = rewire(path.join(rootDir, "src/logic/block.ts"));
+
+var Ed = require(path.join(rootDir, "src/helpers/ed.ts")).Ed;
+var ed = new Ed;
+var zSchema = require(path.join(rootDir, "src/helpers/z_schema")).z_schema;
+var schema = new zSchema();
+var transaction = require(path.join(rootDir, "src/logic/transaction"));
 var passphrase =
     "oath polypody manumit effector half sigmoid abound osmium jewfish weed sunproof ramose";
 var dummyKeypar = ed.makeKeypair(

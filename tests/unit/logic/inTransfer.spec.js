@@ -4,7 +4,7 @@ var sinon = require("sinon");
 var rewire = require("rewire");
 var path = require("path");
 
-var rootDir = path.join(__dirname, "../../..");
+var rootDir = path.join(__dirname, "../../../src");
 
 var InTransfer = rewire(path.join(rootDir, "logic/inTransfer"));
 var constants = require(path.join(rootDir, "helpers/constants")).default;

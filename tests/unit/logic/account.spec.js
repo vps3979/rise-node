@@ -8,9 +8,9 @@ jsonSql.setDialect("postgresql");
 
 var rootDir = path.join(__dirname, "../../..");
 
-var constants = require(path.join(rootDir, "helpers/constants")).default;
+var constants = require(path.join(rootDir, "src/helpers/constants")).default;
 // var Account = rewire(path.join(rootDir, "logic/_account.js"));
-var Account = rewire(path.join(rootDir, "logic/account.ts"));
+var Account = rewire(path.join(rootDir, "src/logic/account.ts"));
 
 var table = "mem_accounts";
 var model = [

@@ -4,9 +4,9 @@ var sinon = require("sinon");
 var rewire = require("rewire");
 var path = require("path");
 
-var rootDir = path.join(__dirname, "../../..");
+var rootDir = path.join(__dirname, "../../../src");
 
-var {BlockRewardLogic} = require('../../../logic/blockReward.ts');
+var {BlockRewardLogic} = require(path.join(rootDir, 'logic/blockReward.ts'));
 var constants = require(path.join(rootDir, "helpers/constants")).default;
 
 describe("logic/blockReward", function() {

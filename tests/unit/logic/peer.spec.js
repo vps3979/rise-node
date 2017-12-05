@@ -1,15 +1,14 @@
-import { PeerState } from "../../../logic/peer";
-
 var chai   = require("chai");
 var expect = chai.expect;
 var sinon  = require("sinon");
 var rewire = require("rewire");
 var path   = require("path");
 
-var rootDir = path.join(__dirname, "../../..");
+var rootDir = path.join(__dirname, "../../../src");
 
 // var Peer = rewire(path.join(rootDir, "logic/peer"));
 var Peer = rewire(path.join(rootDir, "logic/peer.ts")).Peer;
+var PeerState = require(path.join(rootDir, "logic/peer.ts")).PeerState;
 
 describe("logic/peer", function() {
 

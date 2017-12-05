@@ -195,7 +195,7 @@ export class RoundLogic {
 
     const remainderChanges = roundChanges.at(remainderIndex);
 
-    if (remainderChanges.feesRemaining > 0) {
+    if (remainderChanges && remainderChanges.feesRemaining > 0) {
       const feesRemaining = (this.scope.backwards ? -remainderChanges.feesRemaining : remainderChanges.feesRemaining);
 
       this.scope.library.logger.trace('Fees remaining', {

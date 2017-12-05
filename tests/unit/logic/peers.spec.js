@@ -4,10 +4,10 @@ var sinon = require("sinon");
 var rewire = require("rewire");
 var path = require("path");
 
-var rootDir = path.join(__dirname, "../../..");
+var rootDir = path.join(__dirname, "../../../src");
 
-var Peers = require('../../../logic/peers').Peers;
-var Peer = require("../../../logic/peer.ts").Peer;
+var Peers = require(path.join(rootDir, "logic/peers")).Peers;
+var Peer = require(path.join(rootDir, "logic/peer.ts")).Peer;
 
 describe("logic/peers", function() {
 	var instance, schema, logger, peer;
