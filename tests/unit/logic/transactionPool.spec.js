@@ -129,7 +129,7 @@ describe('logic/transactionPool', function () {
         });
     });
 
-	describe('bind()', function () {
+	describe.only('bind()', function () {
 		it('should initialize modules properly', function () {
 			expect(instance.modules.accounts).to.equal(modules.accounts);
 			expect(instance.modules.transactions).to.equal(modules.transactions);
