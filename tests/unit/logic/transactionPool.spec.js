@@ -2,109 +2,180 @@ var chai             = require('chai');
 var expect           = chai.expect;
 var sinon            = require('sinon');
 var rewire           = require('rewire');
-var TransactionPool  = rewire('../../../logic/transactionPool.ts');
-var transactionTypes = require('../../../helpers/transactionTypes').TransactionType;
-var jobsQueue        = require('../../../helpers/jobsQueue').default;
-var constants        = require('../../../helpers/constants').default;
+var path = require("path");
+
+var rootDir = path.join(__dirname, "../../..");
+
+var TransactionPoolModule  = rewire(path.join(rootDir, 'src/logic/transactionPool.ts'));
+var TransactionPool = TransactionPoolModule.TransactionPool;
+var InnerTXQueue = TransactionPoolModule.InnerTXQueue;
+
+var transactionTypes = require(path.join(rootDir, 'src/helpers/transactionTypes')).TransactionType;
+var jobsQueue        = require(path.join(rootDir, 'src/helpers/jobsQueue')).JobsQueue;
+var constants        = require(path.join(rootDir, 'src/helpers/constants')).default;
 const chaiAsPromised = require('chai-as-promised');
 
 describe('logic/transactionPool', function () {
-	var jobsQueueStub, logger;
+    var sandbox;
+    var instance;
+    var library;
+    var modules;
+	var jobsQueueStub;
 
-	beforeEach(function () {
-		jobsQueueStub = sinon.stub(jobsQueue, 'register').returns(true);
-		TransactionPool.__set__('jobsQueue_1', { default: jobsQueue });
-		logger = {
-			error: function (error) {
-			},
-			info : function (error) {
-			},
-			log  : function (error) {
-			},
-			debug: sinon.stub()
-		};
-	});
+    var logger;
+    var broadcastInterval;
+    var releaseLimit;
+    var transaction;
+    var bus;
+
+    before(function() {
+        sandbox = sinon.sandbox.create({
+            injectInto: null,
+            properties: ["spy", "stub", "clock"],
+            useFakeTimers: true,
+            useFakeServer: false
+        });
+
+        sandbox.stub(jobsQueue, "register");
+    });
+
+    beforeEach(function () {
+        library = {
+            bus : {},
+            config : {
+                broadcasts : {
+                    broadcastInterval : 1,
+                    releaseLimit : 2
+                }
+            },
+            logger : {
+                error: sandbox.stub(),
+                info : sandbox.stub(),
+                log  : sandbox.stub(),
+                debug: sandbox.stub()
+
+            },
+            logic : {
+                transaction : {}
+            }
+        };
+
+        modules = {
+            accounts : {},
+            transactions : {},
+            loader : {}
+        };
+
+        instance = new TransactionPool(
+            library.logic.transaction,
+            library.bus,
+            library.logger,
+            library.config
+        );
+
+        instance.bind(
+            modules.accounts,
+            modules.transactions,
+            modules.loader
+        );
+    });
 
 	afterEach(function () {
-		jobsQueueStub.restore();
+        sandbox.reset();
 	});
 
-	describe('when is imported', function () {
+    after(function() {
+        sandbox.restore();
+    });
+
+	describe('constructor', function () {
 		it('should be a function', function () {
-			expect(TransactionPool.TransactionPool).to.be.a('function');
-		});
-	});
-
-	describe('when is instantiated', function () {
-		var instance, broadcastInterval, releaseLimit, transaction, bus, logger;
-
-		beforeEach(function () {
-			broadcastInterval = 1;
-			releaseLimit      = 2;
-			transaction       = 3;
-			bus               = 4;
-			logger            = 5;
-			instance          = new TransactionPool.TransactionPool(
-				broadcastInterval,
-				releaseLimit,
-				transaction,
-				bus,
-				logger
-			);
+			expect(TransactionPool).to.be.a('function');
 		});
 
-		it('should be an instance of TransactionPool', function () {
-			expect(instance).to.be.an.instanceof(TransactionPool.TransactionPool);
-			expect(jobsQueueStub.calledTwice).to.be.true;
-		});
+        it('should be an instance of TransactionPool', function () {
+            expect(instance).to.be.an.instanceof(TransactionPool);
+        });
 
-		it('should initialize library properly', function () {
-			expect(instance.library.logger).to.equal(logger);
-			expect(instance.library.bus).to.equal(bus);
-			expect(instance.library.logic.transaction).to.equal(
-				transaction
-			);
-			expect(
-				instance.library.config.broadcasts.broadcastInterval
-			).to.equal(broadcastInterval);
-			expect(
-				instance.library.config.broadcasts.releaseLimit
-			).to.equal(releaseLimit);
+        it('should initialize library properly', function () {
+            expect(instance.library.logger).to.equal(library.logger);
+            expect(instance.library.bus).to.equal(library.bus);
+            expect(instance.library.logic.transaction).to.equal(library.logic.transaction);
+            expect(instance.library.config).to.equal(library.config);
 		});
 
 		it('should initialize some local properties', function () {
-			expect(instance.unconfirmed).to.be.an.instanceOf(TransactionPool.InnerTXQueue);
-			expect(instance.bundled).to.be.an.instanceOf(TransactionPool.InnerTXQueue);
-			expect(instance.queued).to.be.an.instanceOf(TransactionPool.InnerTXQueue);
-			expect(instance.multisignature).to.be.an.instanceOf(TransactionPool.InnerTXQueue);
+			expect(instance.unconfirmed).to.be.an.instanceOf(InnerTXQueue);
+			expect(instance.bundled).to.be.an.instanceOf(InnerTXQueue);
+			expect(instance.queued).to.be.an.instanceOf(InnerTXQueue);
+			expect(instance.multisignature).to.be.an.instanceOf(InnerTXQueue);
 
 			expect(instance.expiryInterval).to.equal(30000);
-			expect(instance.bundledInterval).to.equal(broadcastInterval);
-			expect(instance.bundleLimit).to.equal(releaseLimit);
+			expect(instance.bundledInterval).to.equal(library.config.broadcasts.broadcastInterval);
+			expect(instance.bundleLimit).to.equal(library.config.broadcasts.releaseLimit);
 			expect(instance.processed).to.equal(0);
 		});
-	});
+
+        it("jobsQueue.register called", function() {
+            expect(jobsQueue.register.calledTwice).to.be.true;
+            expect(jobsQueue.register.firstCall.args.length).to.equal(3);
+            expect(jobsQueue.register.firstCall.args[0]).to.equal("transactionPoolNextBundle");
+            expect(jobsQueue.register.firstCall.args[1]).to.be.a("function");
+            expect(jobsQueue.register.firstCall.args[2]).to.equal(instance.bundledInterval);
+
+            expect(jobsQueue.register.secondCall.args[0]).to.equal("transactionPoolNextExpiry");
+            expect(jobsQueue.register.secondCall.args[1]).to.be.a("function");
+            expect(jobsQueue.register.secondCall.args[2]).to.equal(instance.expiryInterval);
+        });
+    });
 
 	describe('bind()', function () {
-		var instance, accounts, transactions, loader;
-
-		beforeEach(function () {
-			accounts     = 1;
-			transactions = 2;
-			loader       = 3;
-			instance     = new TransactionPool.TransactionPool();
-			instance.bind(accounts, transactions, loader);
-		});
-
 		it('should initialize modules properly', function () {
-			expect(instance.modules.accounts).to.equal(accounts);
-			expect(instance.modules.transactions).to.equal(
-				transactions
-			);
-			expect(instance.modules.loader).to.equal(loader);
+			expect(instance.modules.accounts).to.equal(modules.accounts);
+			expect(instance.modules.transactions).to.equal(modules.transactions);
+			expect(instance.modules.loader).to.equal(modules.loader);
 		});
 	});
 
+
+	describe('queueTransaction()', function () {
+		var instance,
+			callback,
+			transaction_true,
+			transaction_multi,
+			transaction_vote,
+			transaction_false;
+
+		beforeEach(function () {
+			instance = new TransactionPool.TransactionPool();
+			transaction_true = { bundled: true };
+			transaction_multi = { bundled: false, type: transactionTypes.MULTI };
+			transaction_vote = {
+				bundled: false,
+				type: transactionTypes.VOTE,
+				signatures: []
+			};
+			transaction_false = { bundled: false };
+		});
+
+		it('Case 1: return error', function () {
+			instance.bundled.index = new Array(1000).fill(0);
+			expect(() => instance.queueTransaction(transaction_true, true)).to.throw('Transaction pool is full');
+
+		});
+
+		it('Case 2: call to bundled.add()', function () {
+			instance.bundled.index = new Array(997).fill(0);
+			const spy = sinon.spy(instance.bundled, 'add');
+			instance.queueTransaction(transaction_true, true);
+			expect(spy.calledOnce).is.true;
+			expect(spy.firstCall.args[0]).to.be.deep.eq(transaction_true);
+			expect(spy.firstCall.args[1].receivedAt).to.exist;
+		});
+
+		it('should enqueue into multisig without error');
+		it('should enqueue into queued  if not bundled or multisig');
+	});
 	describe('transactionInPool()', function () {
 		var instance;
 
@@ -328,44 +399,6 @@ describe('logic/transactionPool', function () {
 
 	});
 
-	describe('queueTransaction()', function () {
-		var instance,
-			callback,
-			transaction_true,
-			transaction_multi,
-			transaction_vote,
-			transaction_false;
-
-		beforeEach(function () {
-			instance = new TransactionPool.TransactionPool();
-			transaction_true = { bundled: true };
-			transaction_multi = { bundled: false, type: transactionTypes.MULTI };
-			transaction_vote = {
-				bundled: false,
-				type: transactionTypes.VOTE,
-				signatures: []
-			};
-			transaction_false = { bundled: false };
-		});
-
-		it('Case 1: return error', function () {
-			instance.bundled.index = new Array(1000).fill(0);
-			expect(() => instance.queueTransaction(transaction_true, true)).to.throw('Transaction pool is full');
-
-		});
-
-		it('Case 2: call to bundled.add()', function () {
-			instance.bundled.index = new Array(997).fill(0);
-			const spy = sinon.spy(instance.bundled, 'add');
-			instance.queueTransaction(transaction_true, true);
-			expect(spy.calledOnce).is.true;
-			expect(spy.firstCall.args[0]).to.be.deep.eq(transaction_true);
-			expect(spy.firstCall.args[1].receivedAt).to.exist;
-		});
-
-		it('should enqueue into multisig without error');
-		it('should enqueue into queued  if not bundled or multisig');
-	});
 	//
 	describe('applyUnconfirmedList()', function () {
 
