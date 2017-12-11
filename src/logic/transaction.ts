@@ -132,6 +132,7 @@ export class TransactionLogic {
     if (tx.recipientId) {
       const recipient = tx.recipientId.slice(0, -1);
       const recBuf    = new BigNum(recipient).toBuffer({ size: 8 });
+        //console.log(recBuf);
 
       for (let i = 0; i < 8; i++) {
         bb.writeByte(recBuf[i] || 0);
