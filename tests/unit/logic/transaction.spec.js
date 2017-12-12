@@ -12,7 +12,9 @@ var SendTransaction = require(path.join(rootDir, 'src/logic/transactions/send.ts
 var TransactionType = require(path.join(rootDir, 'src/helpers/transactionTypes.ts')).TransactionType;
 var BaseTransactionTypeModule  = require(path.join(rootDir, 'src/logic/transactions/baseTransactionType.ts'));
 var BigNum = require(path.join(rootDir, 'src/helpers/bignum.ts')).default;
+var Slots = require(path.join(rootDir, 'src/helpers/slots.ts')).Slots;
 var TransactionLogic = TransactionModule.TransactionLogic;
+var sql = require(path.join(rootDir, 'sql/logic/transactions')).default;
 
 describe("logic/transaction.ts", function() {
     var sandbox;
@@ -35,14 +37,20 @@ describe("logic/transaction.ts", function() {
 
     beforeEach(function() {
         scope = {
-            db : {},
+            db : {
+                one : sandbox.stub()
+            },
             ed : {
                 sign : sandbox.stub()
             },
             schema : {},
-            genesisblock : {},
+            genesisblock : {
+                id : 123
+            },
             account : {},
-            logger : {}
+            logger : {
+                error : sandbox.stub()
+            }
         };
         modules = {
             rounds : {}
@@ -526,6 +534,699 @@ describe("logic/transaction.ts", function() {
             instance.getBytes(tx, skipSignature, skipSecondSignature);
 
             expect(bb.toBuffer.calledOnce).to.be.true;
+        });
+    });
+
+    describe("ready", function() {
+        var tx;
+        var sender;
+
+        var TTInstnace;
+        var ready;
+
+        beforeEach(function() {
+            tx = {
+                type : TransactionType.SEND
+            };
+            sender = {};
+            ready = true;
+            sandbox.stub(instance, "assertKnownTransactionType");
+            TTInstance = {
+                ready : sandbox.stub().returns(ready)
+            };
+            instance.types[TransactionType.SEND] = TTInstance;
+
+        });
+
+        it("assertKnownTransactionType called", function() {
+            instance.ready(tx, sender);
+
+            expect(instance.assertKnownTransactionType.calledOnce).to.be.true;
+            expect(instance.assertKnownTransactionType.firstCall.args.length).to.equal(1);
+            expect(instance.assertKnownTransactionType.firstCall.args[0]).to.equal(tx);
+        });
+
+        it("false if no sender", function() {
+            var result = instance.ready(tx);
+
+            expect(result).to.be.false;
+        });
+
+        it("transactionTypeInstance.ready called", function() {
+            instance.ready(tx, sender);
+
+            expect(TTInstance.ready.calledOnce).to.be.true;
+            expect(TTInstance.ready.firstCall.args.length).to.equal(2);
+            expect(TTInstance.ready.firstCall.args[0]).to.equal(tx);
+            expect(TTInstance.ready.firstCall.args[1]).to.equal(sender);
+        });
+
+        it("returns transactionTypeInstance.ready", function() {
+            var result = instance.ready(tx, sender);
+
+            expect(result).to.be.true;
+        });
+    });
+
+    describe("assertKnownTransactionType", function() {
+        var tx;
+
+        beforeEach(function() {
+            tx = {
+                type : TransactionType.SEND
+            };
+        });
+
+        it("exists", function() {
+            instance.types[TransactionType.SEND] = {};
+            expect(() => instance.assertKnownTransactionType(tx)).to.not.throw(`Unknown transaction type ${tx.type}`);
+        });
+
+        it("not exists", function() {
+            expect(() => instance.assertKnownTransactionType(tx)).to.throw(`Unknown transaction type ${tx.type}`);
+        });
+    });
+
+    describe("countById", function() {
+        var tx = {
+            id : "id"
+        };
+
+        it("scope.db.one called", function(done) {
+            var result = { count : 10 };
+            scope.db.one.resolves(result);
+
+            instance.countById(tx).then(function() {
+                expect(scope.db.one.calledOnce).to.be.true;
+                expect(scope.db.one.firstCall.args.length).to.equal(2);
+                expect(scope.db.one.firstCall.args[0]).to.equal(sql.countById);
+                expect(scope.db.one.firstCall.args[1]).to.deep.equal({ id : tx.id });
+                done();
+            }).catch(function(err) {
+                done(new Error("Should resolves"));
+            });
+        });
+
+        it("scope.db.one throws error", function(done) {
+            var error = new Error("error");
+            scope.db.one.rejects(error);
+
+            instance.countById(tx).then(function() {
+                done(new Error("Should rejects"));
+            }).catch(function(err) {
+                expect(scope.logger.error.calledOnce).to.be.true;
+                expect(scope.logger.error.firstCall.args.length).to.equal(1);
+                expect(scope.logger.error.firstCall.args[0]).to.equal(error.stack);
+                expect(err).to.be.instanceof(Error);
+                expect(err.message).to.be.equal('Transaction#countById error');
+                done();
+            });
+        });
+
+        it("check result", function(done) {
+            var result = { count : 10 };
+            scope.db.one.resolves(result);
+
+            instance.countById(tx).then(function(count) {
+                expect(count).to.be.equal(result.count);
+                done();
+            }).catch(function(err) {
+                done(new Error("Should resolves"));
+            });
+        });
+    });
+
+    describe("assertNonConfirmed", function() {
+        var tx = {
+            id : "id"
+        };
+
+        beforeEach(function() {
+            sandbox.stub(instance, "countById");
+        });
+
+        it("resolves", function(done) {
+            instance.countById.resolves(0);
+            instance.assertNonConfirmed(tx).then(function() {
+                expect(instance.countById.calledOnce).to.be.true;
+                expect(instance.countById.firstCall.args.length).to.equal(1);
+                expect(instance.countById.firstCall.args[0]).to.equal(tx);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("rejects", function(done) {
+            instance.countById.resolves(10);
+            instance.assertNonConfirmed(tx).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal(`Transaction is already confirmed ${tx.id}`);
+                done();
+            });
+        });
+    });
+
+    describe("checkBalance", function() {
+        var number;
+        var balanceKey;
+        var tx;
+        var sender;
+
+        beforeEach(function() {
+            number = 100;
+            balanceKey = "balance";
+            tx = {
+                blockId : 200 
+            };
+            sender = {
+                address : "address",
+                balance : 200,
+                u_balance : 300
+            };
+        });
+
+        it("check balance; success", function() {
+            var result = instance.checkBalance(number, balanceKey, tx, sender);
+
+            expect(result).to.have.property("error");
+            expect(result).to.have.property("exceeded");
+            expect(result.error).to.be.null;
+            expect(result.exceeded).to.be.false;
+        });
+
+        it("check balance; exceeded", function() {
+            var bal = (new BigNum(sender.balance.toString()) || new BigNum(0)).div(Math.pow(10, 8));
+            var error = `Account does not have enough currency: ${sender.address} balance: ${bal}`;
+            
+            number = 201;
+            var result = instance.checkBalance(number, balanceKey, tx, sender);
+
+            expect(result).to.have.property("error");
+            expect(result).to.have.property("exceeded");
+            expect(result.error).to.be.equal(error);
+            expect(result.exceeded).to.be.true;
+        });
+
+        it("check u_balance; success", function() {
+            balanceKey = "u_balance";
+            var result = instance.checkBalance(number, balanceKey, tx, sender);
+
+            expect(result).to.have.property("error");
+            expect(result).to.have.property("exceeded");
+            expect(result.error).to.be.null;
+            expect(result.exceeded).to.be.false;
+        });
+
+        it("check u_balance; exceeded", function() {
+            balanceKey = "u_balance";
+            var bal = (new BigNum(sender.u_balance.toString()) || new BigNum(0)).div(Math.pow(10, 8));
+            var error = `Account does not have enough currency: ${sender.address} balance: ${bal}`;
+            
+            number = 301;
+            var result = instance.checkBalance(number, balanceKey, tx, sender);
+
+            expect(result).to.have.property("error");
+            expect(result).to.have.property("exceeded");
+            expect(result.error).to.be.equal(error);
+            expect(result.exceeded).to.be.true;
+        });
+    });
+
+    describe("process", function() {
+        var tx;
+        var sender;
+        var requster;
+        var txId;
+        var typeInstance;
+
+        beforeEach(function() {
+            tx = {
+                id : 1,
+                type : TransactionType.SEND
+            };
+            sender = {
+                address : "address"
+            };
+            requester = {};
+            txId = 1;
+            typeInstance = {
+                process : sandbox.stub().resolves()
+            };
+
+            sandbox.stub(instance, "getId").returns(txId);
+            sandbox.stub(instance, "assertKnownTransactionType");
+            instance.types[TransactionType.SEND] = typeInstance;
+        });
+
+        it("assertKnownTransactionType called", function(done) {
+            instance.process(tx, sender, requester).then(function() {
+                expect(instance.assertKnownTransactionType.calledOnce).to.be.true;
+                expect(instance.assertKnownTransactionType.firstCall.args.length).to.equal(1);
+                expect(instance.assertKnownTransactionType.firstCall.args[0]).to.equal(tx);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("throws 'missing sender'", function(done) {
+            sender = null;
+            instance.process(tx, sender, requester).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Missing sender");
+                done();
+            });
+        });
+
+        it("getId called", function(done) {
+            instance.process(tx, sender, requester).then(function() {
+                expect(instance.getId.calledOnce).to.be.true;
+                expect(instance.getId.firstCall.args.length).to.equal(1);
+                expect(instance.getId.firstCall.args[0]).to.equal(tx);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("throws 'invalid transaction id'", function(done) {
+            instance.getId.returns(null);
+            instance.process(tx, sender, requester).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Invalid transaction id");
+                done();
+            });
+        });
+
+        it("type.process called", function(done) {
+            instance.process(tx, sender, requester).then(function() {
+                expect(typeInstance.process.calledOnce).to.be.true;
+                expect(typeInstance.process.firstCall.args.length).to.equal(2);
+                expect(typeInstance.process.firstCall.args[0]).to.equal(tx);
+                expect(typeInstance.process.firstCall.args[1]).to.equal(sender);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("check result", function(done) {
+            instance.process(tx, sender, requester).then(function(newTx) {
+                expect(tx).to.equal(newTx);
+                expect(tx).to.have.property("senderId");
+                expect(tx.senderId).to.be.equal(sender.address);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+    });
+
+    describe("verify", function() {
+        var tx;
+        var sender;
+        var requester;
+        var height;
+
+        var typeInstance;
+        var fee;
+        var balanceCheck;
+
+        before(function() {
+            sandbox.stub(Slots, "getSlotNumber");
+        });
+
+        beforeEach(function() {
+            requester = {
+                publicKey : "requesterPublicKey",
+                secondSignature : "secondSignature"
+            };
+            sender = {
+                address : "address",
+                publicKey : "senderPublicKey",
+                secondSignature : "secondSignature",
+                multisignatures : [
+                    requester.publicKey,
+                    "testFirst",
+                    "testSecond"
+                ]
+            };
+            tx = {
+                type : TransactionType.SEND,
+                senderPublicKey : sender.publicKey,
+                senderId : sender.address,
+                requesterPublicKey : requester.publicKey,
+                signature : "signature",
+                signSignature : "signature",
+                blockId : 124,
+                asset : {
+                    multisignature : {
+                        keysgroup : []
+                    }
+                },
+                signatures : [
+                    "checkFirst",
+                    "checkSecond"
+                ],
+                amount : 12,
+                fee : 5,
+                timestamp : 112341234
+            };
+            height = 100;
+
+            fee = 5;
+            typeInstance = {
+                calculateFee : sandbox.stub().returns(fee),
+                verify : sandbox.stub().resolves()
+            };
+            balanceCheck = {
+                exceeded : false,
+                error : null
+            };
+
+            instance.types[TransactionType.SEND] = typeInstance;
+
+            sandbox.stub(instance, "assertKnownTransactionType");
+            sandbox.stub(instance, "verifySignature");
+            sandbox.stub(instance, "checkBalance");
+            sandbox.stub(instance, "assertNonConfirmed");
+
+            instance.verifySignature.withArgs(tx, tx.requesterPublicKey, tx.signature).returns(true);
+            instance.verifySignature.withArgs(tx, sender.secondPublicKey, tx.signSignature, true).returns(true);
+            instance.verifySignature.withArgs(tx, "testFirst", "checkFirst").returns(true);
+            instance.verifySignature.withArgs(tx, "testSecond", "checkSecond").returns(true);
+            instance.verifySignature.returns(false);
+            instance.checkBalance.returns(balanceCheck);
+            instance.assertNonConfirmed.resolves();
+            Slots.getSlotNumber.returns(0);
+        });
+
+        after(function() {
+            Slots.getSlotNumber.restore();
+        });
+
+        it("assertKnownTransactionType called", function(done) {
+            instance.verify(tx, sender, requester, height).then(function() {
+                expect(instance.assertKnownTransactionType.calledOnce).to.be.true;
+                expect(instance.assertKnownTransactionType.firstCall.args.length).to.be.equal(1);
+                expect(instance.assertKnownTransactionType.firstCall.args[0]).to.be.equal(tx);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("sender is missed", function(done) {
+            delete tx.signSignature;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Missing sender second signature");
+                done();
+            });
+        });
+
+        it("sender second signature missed", function(done) {
+            delete tx.requesterPublicKey;
+            delete sender.secondSignature;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Sender does not have a second signature");
+                done();
+            });
+        });
+
+        it("sender second signature is not necessary", function(done) {
+            delete sender.secondSignature;
+            delete tx.signSignature;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Missing requester second signature");
+                done();
+            });
+        });
+
+        it("requester second signature missed", function(done) {
+            delete requester.secondSignature;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Requester does not have a second signature");
+                done();
+            });
+        });
+
+        it("requester second signature is not necessary", function(done) {
+            delete requester.secondSignature;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Requester does not have a second signature");
+                done();
+            });
+        });
+
+        it("incorrect sender public key", function(done) {
+            tx.senderPublicKey = "xINCORRECTx";
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal(`Invalid sender public key: ${tx.senderPublicKey} expected ${sender.publicKey}`);
+                done();
+            });
+        });
+
+        it("unable to send from genesis account", function(done) {
+            instance.scope.genesisblock.generatorPublicKey = sender.publicKey;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Invalid sender. Can not send from genesis account");
+                done();
+            });
+        });
+
+        it("invalid sender address", function(done) {
+            tx.senderId = "xINCORRECTx";
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Invalid sender address");
+                done();
+            });
+        });
+
+        it("invalid member in keygroup", function(done) {
+            sender.multisignatures = [];
+            tx.asset.multisignature.keysgroup.push(0);
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Invalid member in keysgroup");
+                done();
+            });
+        });
+
+        it("account does not belong to signature group", function(done) {
+            sender.multisignatures = [];
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Account does not belong to multisignature group");
+                done();
+            });
+        });
+
+        it("signature verification has failed", function(done) {
+            instance.verifySignature.withArgs(tx, tx.requesterPublicKey, tx.signature).returns(false);
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(instance.verifySignature.calledOnce).to.be.true;
+                expect(instance.verifySignature.firstCall.args.length).to.be.equal(3);
+                expect(instance.verifySignature.firstCall.args[0]).to.be.equal(tx);
+                expect(instance.verifySignature.firstCall.args[1]).to.be.equal(tx.requesterPublicKey);
+                expect(instance.verifySignature.firstCall.args[2]).to.be.equal(tx.signature);
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Failed to verify signature");
+                done();
+            });
+        });
+
+        it("second signature verification has failed", function(done) {
+            instance.verifySignature.withArgs(tx, sender.secondPublicKey, tx.signSignature).returns(false);
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(instance.verifySignature.calledTwice).to.be.true;
+                expect(instance.verifySignature.secondCall.args.length).to.be.equal(4);
+                expect(instance.verifySignature.secondCall.args[0]).to.be.equal(tx);
+                expect(instance.verifySignature.secondCall.args[1]).to.be.equal(sender.secondPublicKey);
+                expect(instance.verifySignature.secondCall.args[2]).to.be.equal(tx.signSignature);
+                expect(instance.verifySignature.secondCall.args[3]).to.be.equal(true);
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Failed to verify second signature");
+                done();
+            });
+        });
+
+        it("duplicate in transaction", function(done) {
+            tx.signatures.push(tx.signatures[0]);
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Encountered duplicate signature in transaction");
+                done();
+            });
+        });
+
+        it("failed to verify multisignature", function(done) {
+            instance.verifySignature.withArgs(tx, "testFirst", "checkFirst").returns(false);
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Failed to verify multisignature");
+                done();
+            });
+        });
+
+        it("types.calculateFee called", function(done) {
+            instance.verify(tx, sender, requester, height).then(function() {
+                expect(typeInstance.calculateFee.calledOnce).to.be.true;
+                expect(typeInstance.calculateFee.firstCall.args.length).to.be.equal(3);
+                expect(typeInstance.calculateFee.firstCall.args[0]).to.be.equal(tx);
+                expect(typeInstance.calculateFee.firstCall.args[1]).to.be.equal(sender);
+                expect(typeInstance.calculateFee.firstCall.args[2]).to.be.equal(height);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+        
+        it("invalid transaction fee", function(done) {
+            tx.fee = 9;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Invalid transaction fee");
+                done();
+            });
+        });
+
+        it("invalid transaction amount", function(done) {
+            tx.amount = -1;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Invalid transaction amount");
+                done();
+            });
+        });
+
+        it("checkBalance called", function(done) {
+            var amount = new BigNum(tx.amount.toString()).plus(tx.fee.toString());
+            instance.verify(tx, sender, requester, height).then(function() {
+                expect(instance.checkBalance.calledOnce).to.be.true;
+                expect(instance.checkBalance.firstCall.args.length).to.be.equal(4);
+                expect(instance.checkBalance.firstCall.args[0]).to.be.deep.equal(amount);
+                expect(instance.checkBalance.firstCall.args[1]).to.be.deep.equal("balance");
+                expect(instance.checkBalance.firstCall.args[2]).to.be.deep.equal(tx);
+                expect(instance.checkBalance.firstCall.args[3]).to.be.deep.equal(sender);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("balance exceeded", function(done) {
+            balanceCheck.error = "error";
+            balanceCheck.exceeded = true;
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal(balanceCheck.error);
+                done();
+            });
+        });
+
+        it("Slots.getSlotNumber called", function(done) {
+            instance.verify(tx, sender, requester, height).then(function() {
+                expect(Slots.getSlotNumber.calledTwice).to.be.true;
+                expect(Slots.getSlotNumber.firstCall.args.length).to.be.equal(1);
+                expect(Slots.getSlotNumber.firstCall.args[0]).to.be.equal(tx.timestamp);
+                expect(Slots.getSlotNumber.secondCall.args.length).to.be.equal(0);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("invalid timestamp", function(done) {
+            Slots.getSlotNumber.onCall(0).returns(10);
+            Slots.getSlotNumber.onCall(1).returns(2);
+            instance.verify(tx, sender, requester, height).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Invalid transaction timestamp. Timestamp is in the future");
+                done();
+            });
+        });
+
+        it("types.verify called", function(done){
+            instance.verify(tx, sender, requester, height).then(function() {
+                expect(typeInstance.verify.calledOnce).to.be.true;
+                expect(typeInstance.verify.firstCall.args.length).to.be.equal(2);
+                expect(typeInstance.verify.firstCall.args[0]).to.be.equal(tx);
+                expect(typeInstance.verify.firstCall.args[1]).to.be.equal(sender);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("assertNonConfirmed called", function(done) {
+            instance.verify(tx, sender, requester, height).then(function() {
+                expect(instance.assertNonConfirmed.calledOnce).to.be.true;
+                expect(instance.assertNonConfirmed.firstCall.args.length).to.be.equal(1);
+                expect(instance.assertNonConfirmed.firstCall.args[0]).to.be.equal(tx);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("success", function(done) {
+            instance.verify(tx, sender, requester, height).then(function(result) {
+                expect(result).to.be.undefined;
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
         });
     });
 });

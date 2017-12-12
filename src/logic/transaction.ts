@@ -132,7 +132,6 @@ export class TransactionLogic {
     if (tx.recipientId) {
       const recipient = tx.recipientId.slice(0, -1);
       const recBuf    = new BigNum(recipient).toBuffer({ size: 8 });
-        //console.log(recBuf);
 
       for (let i = 0; i < 8; i++) {
         bb.writeByte(recBuf[i] || 0);
@@ -219,8 +218,9 @@ export class TransactionLogic {
    */
   public checkBalance(amount: number | BigNumber, balanceKey: 'balance' | 'u_balance',
                       tx: IConfirmedTransaction<any> | IBaseTransaction<any>, sender: any) {
-    const accountBalance  = sender[balanceKey].toString();
-    const exceededBalance = new BigNum(accountBalance).lessThan(amount);
+    const accountBalanceString  = sender[balanceKey].toString();
+    const accountBalance = new BigNum(accountBalanceString);
+    const exceededBalance = accountBalance.lessThan(amount);
     // tslint:disable-next-line
     const exceeded        = (tx['blockId'] !== this.scope.genesisblock.id && exceededBalance);
     return {
@@ -294,7 +294,15 @@ export class TransactionLogic {
       throw new Error('Invalid sender address');
     }
 
-    const multisignatures = sender.multisignatures || sender.u_multisignatures || [];
+    let multisignatures;
+    if(sender.multisignatures && sender.multisignatures.length){
+      multisignatures = sender.multisignatures.slice(); 
+    } else if(sender.u_multisignatures && sender.u_multisignatures.length) {
+      multisignatures = sender.u_multisignatures.slice(); 
+    } else {
+      multisignatures = [];
+    }
+
     if (multisignatures.length === 0) {
       if (tx.asset && tx.asset.multisignature && tx.asset.multisignature.keysgroup) {
         for (const key of tx.asset.multisignature.keysgroup) {
@@ -308,7 +316,7 @@ export class TransactionLogic {
 
     if (tx.requesterPublicKey) {
       multisignatures.push(tx.requesterPublicKey);
-      if (sender.multisignatures.indexOf(tx.requesterPublicKey) < 0) {
+      if (!sender.multisignatures || sender.multisignatures.indexOf(tx.requesterPublicKey) < 0) {
         throw new Error('Account does not belong to multisignature group');
       }
     }
