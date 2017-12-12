@@ -41,19 +41,25 @@ describe("logic/transaction.ts", function() {
                 one : sandbox.stub()
             },
             ed : {
-                sign : sandbox.stub()
+                sign : sandbox.stub(),
+                verify : sandbox.stub()
             },
             schema : {},
             genesisblock : {
                 id : 123
             },
-            account : {},
+            account : {
+                merge : sandbox.stub()
+            },
             logger : {
-                error : sandbox.stub()
+                error : sandbox.stub(),
+                trace : sandbox.stub()
             }
         };
         modules = {
-            rounds : {}
+            rounds : {
+                calcRound : sandbox.stub()
+            }
         };
 
         instance = new TransactionLogic(scope);
@@ -1229,6 +1235,271 @@ describe("logic/transaction.ts", function() {
             });
         });
     });
+
+    describe("verifySignature", function() {
+        var tx;
+        var publicKey;
+        var signature;
+        var secondSignature;
+
+        var hash;
+        var expectedResult;
+
+        beforeEach(function() {
+            tx = {};
+            publicKey = "1a2b";
+            signature = "3c4d";
+            secondSignature = true;
+            expectedResult = {};
+            hash = {};
+
+            sandbox.stub(instance, "assertKnownTransactionType");
+            sandbox.stub(instance, "getHash").returns(hash);
+            instance.scope.ed.verify.returns(expectedResult);
+        });
+
+        it("assertKnownTransactionType called", function() {
+            instance.verifySignature(tx, publicKey, signature, secondSignature);
+
+            expect(instance.assertKnownTransactionType.calledOnce).to.be.true;
+            expect(instance.assertKnownTransactionType.firstCall.args.length).to.be.equal(1);
+            expect(instance.assertKnownTransactionType.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("signature is not set", function() {
+            signature = null;
+            var result = instance.verifySignature(tx, publicKey, signature, secondSignature);
+            expect(result).to.be.false;
+        });
+
+        it("getHash called", function() {
+            instance.verifySignature(tx, publicKey, signature, secondSignature);
+
+            expect(instance.getHash.calledOnce).to.be.true;
+            expect(instance.getHash.firstCall.args.length).to.be.equal(3);
+            expect(instance.getHash.firstCall.args[0]).to.be.equal(tx);
+            expect(instance.getHash.firstCall.args[1]).to.be.equal(!secondSignature);
+            expect(instance.getHash.firstCall.args[2]).to.be.equal(true);
+        });
+
+        it("scope.ed.verify called", function() {
+            instance.verifySignature(tx, publicKey, signature, secondSignature);
+
+            expect(instance.scope.ed.verify.calledOnce).to.be.true;
+            expect(instance.scope.ed.verify.firstCall.args.length).to.be.equal(3);
+            expect(instance.scope.ed.verify.firstCall.args[0]).to.be.equal(hash);
+            expect(instance.scope.ed.verify.firstCall.args[1]).to.be.deep.equal(Buffer.from(signature, 'hex'));
+            expect(instance.scope.ed.verify.firstCall.args[2]).to.be.deep.equal(Buffer.from(publicKey, 'hex'));
+        });
+
+        it("compare return", function() {
+            var result = instance.verifySignature(tx, publicKey, signature, secondSignature);
+            expect(result).to.be.equal(expectedResult);
+        });
+    });
+
+    describe("apply", function() {
+        var tx;
+        var block;
+        var sender;
+
+        var balanceCheck;
+        var amountNumber;
+        var round;
+        var typeInstance;
+
+        beforeEach(function() {
+            tx = {
+                type : TransactionType.SEND,
+                amount : 200,
+                fee : 2
+            };
+            block = {
+                id : "id",
+                height : 1200
+            };
+            sender = {
+                address : "address"
+            };
+
+            balanceCheck = {
+                exceeded : false,
+                error : null
+            };
+            amountNumber = new BigNum(tx.amount.toString()).plus(tx.fee.toString());
+            round = {};
+            typeInstance = {
+                apply : sandbox.stub().resolves()
+            };
+
+            sandbox.stub(instance, "ready").returns(true);
+            sandbox.stub(instance, "checkBalance").returns(balanceCheck);
+            modules.rounds.calcRound.returns(round);
+            scope.account.merge.resolves();
+
+            instance.types[TransactionType.SEND] = typeInstance;
+        });
+
+        it("ready called", function(done) {
+            instance.apply(tx, block, sender).then(function() {
+                expect(instance.ready.calledOnce).to.be.true;
+                expect(instance.ready.firstCall.args.length).to.be.equal(2);
+                expect(instance.ready.firstCall.args[0]).to.be.equal(tx);
+                expect(instance.ready.firstCall.args[1]).to.be.equal(sender);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("throws 'Transaction is not ready'", function(done) {
+            instance.ready.returns(false);
+            instance.apply(tx, block, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal("Transaction is not ready");
+                done();
+            });
+        });
+
+        it("checkBalance called", function(done) {
+            instance.apply(tx, block, sender).then(function() {
+                expect(instance.checkBalance.calledOnce).to.be.true;
+                expect(instance.checkBalance.firstCall.args.length).to.be.equal(4);
+                expect(instance.checkBalance.firstCall.args[0]).to.be.deep.equal(amountNumber);
+                expect(instance.checkBalance.firstCall.args[1]).to.be.equal("balance");
+                expect(instance.checkBalance.firstCall.args[2]).to.be.equal(tx);
+                expect(instance.checkBalance.firstCall.args[3]).to.be.equal(sender);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("checkBalance throws error", function(done) {
+            balanceCheck.exceeded = true;
+            balanceCheck.error = "error";
+            instance.apply(tx, block, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error.message).to.be.equal(balanceCheck.error);
+                done();
+            });
+        });
+
+        it("modules.rounds.calcRound called 1", function(done) {
+            instance.apply(tx, block, sender).then(function() {
+                expect(modules.rounds.calcRound.calledTwice).to.be.true;
+                expect(modules.rounds.calcRound.firstCall.args.length).to.be.equal(1);
+                expect(modules.rounds.calcRound.firstCall.args[0]).to.be.equal(block.height);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("scope.logger.trace called", function(done) {
+            instance.apply(tx, block, sender).then(function() {
+                expect(scope.logger.trace.calledOnce).to.be.true;
+                expect(scope.logger.trace.firstCall.args.length).to.be.equal(2);
+                expect(scope.logger.trace.firstCall.args[0]).to.be.equal("Logic/Transaction->apply");
+                expect(scope.logger.trace.firstCall.args[1]).to.be.deep.equal({
+                    balance : -amountNumber.toNumber(),
+                    blockId : block.id,
+                    round : round,
+                    sender : sender.address
+                });
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("modules.rounds.calcRound called 2", function(done) {
+            instance.apply(tx, block, sender).then(function() {
+                expect(modules.rounds.calcRound.calledTwice).to.be.true;
+                expect(modules.rounds.calcRound.secondCall.args.length).to.be.equal(1);
+                expect(modules.rounds.calcRound.secondCall.args[0]).to.be.equal(block.height);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("scope.account.merge called", function(done) {
+            instance.apply(tx, block, sender).then(function() {
+                expect(scope.account.merge.calledOnce).to.be.true;
+                expect(scope.account.merge.firstCall.args.length).to.be.equal(3);
+                expect(scope.account.merge.firstCall.args[0]).to.be.equal(sender.address);
+                expect(scope.account.merge.firstCall.args[1]).to.be.deep.equal({
+                    balance : -amountNumber.toNumber(),
+                    blockId : block.id,
+                    round : round
+                });
+                expect(scope.account.merge.firstCall.args[2]).to.be.a("function");
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("typeInstance.apply called", function(done) {
+            instance.apply(tx, block, sender).then(function() {
+                expect(typeInstance.apply.calledOnce).to.be.true;
+                expect(typeInstance.apply.firstCall.args.length).to.be.equal(3);
+                expect(typeInstance.apply.firstCall.args[0]).to.be.equal(tx);
+                expect(typeInstance.apply.firstCall.args[1]).to.be.equal(block);
+                expect(typeInstance.apply.firstCall.args[2]).to.be.equal(sender);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("apply failed; modules.rounds.calcRound called 3", function(done) {
+            var error = new Error("error");
+            typeInstance.apply.rejects(error);
+            instance.apply(tx, block, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(modules.rounds.calcRound.calledThrice).to.be.true;
+                expect(modules.rounds.calcRound.thirdCall.args.length).to.be.equal(1);
+                expect(modules.rounds.calcRound.thirdCall.args[0]).to.be.equal(block.height);
+                done();
+            });
+        });
+
+        it("apply failed; scope.account.merge called second time", function(done) {
+            var error = new Error("error");
+            typeInstance.apply.rejects(error);
+            instance.apply(tx, block, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(scope.account.merge.calledTwice).to.be.true;
+                expect(scope.account.merge.secondCall.args.length).to.be.equal(3);
+                expect(scope.account.merge.secondCall.args[0]).to.be.equal(sender.address);
+                expect(scope.account.merge.secondCall.args[1]).to.be.deep.equal({
+                    balance : amountNumber.toNumber(),
+                    blockId : block.id,
+                    round : round
+                });
+                expect(scope.account.merge.firstCall.args[2]).to.be.a("function");
+                done();
+            });
+        });
+
+        it("apply failed; check error", function(done) {
+            var error = new Error("error");
+            typeInstance.apply.rejects(error);
+            instance.apply(tx, block, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error).to.be.equal(error);
+                done();
+            });
+        });
+    });
 });
-
-
