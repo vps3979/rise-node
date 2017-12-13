@@ -15,6 +15,7 @@ var BigNum = require(path.join(rootDir, 'src/helpers/bignum.ts')).default;
 var Slots = require(path.join(rootDir, 'src/helpers/slots.ts')).Slots;
 var TransactionLogic = TransactionModule.TransactionLogic;
 var sql = require(path.join(rootDir, 'sql/logic/transactions')).default;
+var txSchema = require(path.join(rootDir, 'src/schema/logic/transaction')).default;
 
 describe("logic/transaction.ts", function() {
     var sandbox;
@@ -44,7 +45,10 @@ describe("logic/transaction.ts", function() {
                 sign : sandbox.stub(),
                 verify : sandbox.stub()
             },
-            schema : {},
+            schema : {
+                validate : sandbox.stub(),
+                getLastErrors : sandbox.stub()
+            },
             genesisblock : {
                 id : 123
             },
@@ -1500,6 +1504,540 @@ describe("logic/transaction.ts", function() {
                 expect(error).to.be.equal(error);
                 done();
             });
+        });
+    });
+
+    describe("undo", function() {
+        var tx;
+        var block;
+        var sender;
+
+        var balanceCheck;
+        var amountNumber;
+        var round;
+        var mergedSender;
+        var typeInstance;
+
+        beforeEach(function() {
+            tx = {
+                type : TransactionType.SEND,
+                amount : 200,
+                fee : 2
+            };
+            block = {
+                id : "id",
+                height : 1200
+            };
+            sender = {
+                address : "address"
+            };
+
+            balanceCheck = {
+                exceeded : false,
+                error : null
+            };
+            amountNumber = new BigNum(tx.amount.toString()).plus(tx.fee.toString()).toNumber();
+            round = {};
+            mergedSender = {};
+            typeInstance = {
+                undo : sandbox.stub().resolves()
+            };
+
+            sandbox.stub(instance, "ready").returns(true);
+            sandbox.stub(instance, "checkBalance").returns(balanceCheck);
+            modules.rounds.calcRound.returns(round);
+            scope.account.merge.resolves(mergedSender);
+
+            instance.types[TransactionType.SEND] = typeInstance;
+        });
+
+        it("modules.rounds.calcRound called 1", function(done) {
+            instance.undo(tx, block, sender).then(function() {
+                expect(modules.rounds.calcRound.calledTwice).to.be.true;
+                expect(modules.rounds.calcRound.firstCall.args.length).to.be.equal(1);
+                expect(modules.rounds.calcRound.firstCall.args[0]).to.be.equal(block.height);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("scope.logger.trace called", function(done) {
+            instance.undo(tx, block, sender).then(function() {
+                expect(scope.logger.trace.calledOnce).to.be.true;
+                expect(scope.logger.trace.firstCall.args.length).to.be.equal(2);
+                expect(scope.logger.trace.firstCall.args[0]).to.be.equal("Logic/Transaction->undo");
+                expect(scope.logger.trace.firstCall.args[1]).to.be.deep.equal({
+                    balance : amountNumber,
+                    blockId : block.id,
+                    round : round,
+                    sender : sender.address
+                });
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("modules.rounds.calcRound called 2", function(done) {
+            instance.undo(tx, block, sender).then(function() {
+                expect(modules.rounds.calcRound.calledTwice).to.be.true;
+                expect(modules.rounds.calcRound.secondCall.args.length).to.be.equal(1);
+                expect(modules.rounds.calcRound.secondCall.args[0]).to.be.equal(block.height);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("scope.account.merge called", function(done) {
+            instance.undo(tx, block, sender).then(function() {
+                expect(scope.account.merge.calledOnce).to.be.true;
+                expect(scope.account.merge.firstCall.args.length).to.be.equal(3);
+                expect(scope.account.merge.firstCall.args[0]).to.be.equal(sender.address);
+                expect(scope.account.merge.firstCall.args[1]).to.be.deep.equal({
+                    balance : amountNumber,
+                    blockId : block.id,
+                    round : round
+                });
+                expect(scope.account.merge.firstCall.args[2]).to.be.a("function");
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("typeInstance.apply called", function(done) {
+            instance.undo(tx, block, sender).then(function() {
+                expect(typeInstance.undo.calledOnce).to.be.true;
+                expect(typeInstance.undo.firstCall.args.length).to.be.equal(3);
+                expect(typeInstance.undo.firstCall.args[0]).to.be.equal(tx);
+                expect(typeInstance.undo.firstCall.args[1]).to.be.equal(block);
+                expect(typeInstance.undo.firstCall.args[2]).to.be.equal(mergedSender);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("apply failed; modules.rounds.calcRound called 3", function(done) {
+            var error = new Error("error");
+            typeInstance.undo.rejects(error);
+            instance.undo(tx, block, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(modules.rounds.calcRound.calledThrice).to.be.true;
+                expect(modules.rounds.calcRound.thirdCall.args.length).to.be.equal(1);
+                expect(modules.rounds.calcRound.thirdCall.args[0]).to.be.equal(block.height);
+                done();
+            });
+        });
+
+        it("apply failed; scope.account.merge called second time", function(done) {
+            var error = new Error("error");
+            typeInstance.undo.rejects(error);
+            instance.undo(tx, block, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(scope.account.merge.calledTwice).to.be.true;
+                expect(scope.account.merge.secondCall.args.length).to.be.equal(3);
+                expect(scope.account.merge.secondCall.args[0]).to.be.equal(sender.address);
+                expect(scope.account.merge.secondCall.args[1]).to.be.deep.equal({
+                    balance : -amountNumber,
+                    blockId : block.id,
+                    round : round
+                });
+                expect(scope.account.merge.firstCall.args[2]).to.be.a("function");
+                done();
+            });
+        });
+
+        it("apply failed; check error", function(done) {
+            var error = new Error("error");
+            typeInstance.undo.rejects(error);
+            instance.undo(tx, block, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error).to.be.equal(error);
+                done();
+            });
+        });
+    });
+
+    describe("undoUnconfirmed", function() {
+        var tx;
+        var sender;
+
+        var amountNumber;
+        var mergedSender;
+        var typeInstance;
+
+        beforeEach(function() {
+            tx = {
+                type : TransactionType.SEND,
+                amount : 200,
+                fee : 2
+            };
+            sender = {
+                address : "address"
+            };
+
+            amountNumber = new BigNum(tx.amount.toString()).plus(tx.fee.toString()).toNumber();
+            mergedSender = {};
+            typeInstance = {
+                undoUnconfirmed : sandbox.stub().resolves()
+            };
+
+            scope.account.merge.resolves(mergedSender);
+
+            instance.types[TransactionType.SEND] = typeInstance;
+        });
+
+        it("scope.account.merge called", function(done) {
+            instance.undoUnconfirmed(tx, sender).then(function() {
+                expect(scope.account.merge.calledOnce).to.be.true;
+                expect(scope.account.merge.firstCall.args.length).to.be.equal(3);
+                expect(scope.account.merge.firstCall.args[0]).to.be.equal(sender.address);
+                expect(scope.account.merge.firstCall.args[1]).to.be.deep.equal({ u_balance : amountNumber });
+                expect(scope.account.merge.firstCall.args[2]).to.be.a("function");
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("typeInstance.undoUnconfirmed called", function(done) {
+            instance.undoUnconfirmed(tx, sender).then(function() {
+                expect(typeInstance.undoUnconfirmed.calledOnce).to.be.true;
+                expect(typeInstance.undoUnconfirmed.firstCall.args.length).to.be.equal(2);
+                expect(typeInstance.undoUnconfirmed.firstCall.args[0]).to.be.equal(tx);
+                expect(typeInstance.undoUnconfirmed.firstCall.args[1]).to.be.equal(mergedSender);
+                done();
+            }).catch(function(error) {
+                done(error);
+            });
+        });
+
+        it("error thrown; scope.account.merge called", function(done) {
+            var error = new Error("error");
+            typeInstance.undoUnconfirmed.rejects(error);
+            instance.undoUnconfirmed(tx, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(scope.account.merge.calledTwice).to.be.true;
+                expect(scope.account.merge.secondCall.args.length).to.be.equal(3);
+                expect(scope.account.merge.secondCall.args[0]).to.be.equal(sender.address);
+                expect(scope.account.merge.secondCall.args[1]).to.be.deep.equal({ u_balance : -amountNumber });
+                expect(scope.account.merge.secondCall.args[2]).to.be.a("function");
+                done();
+            });
+        });
+
+        it("error thrown; check error", function(done) {
+            var error = new Error("error");
+            typeInstance.undoUnconfirmed.rejects(error);
+            instance.undoUnconfirmed(tx, sender).then(function() {
+                done(new Error("Should be rejected"));
+            }).catch(function(error) {
+                expect(error).to.be.instanceof(Error);
+                expect(error).to.be.equal(error);
+                done();
+            });
+        });
+    });
+
+    describe("dbSave", function() {
+        var tx;
+        var buffers;
+        var typeSQL;
+
+        beforeEach(function() {
+            tx = {
+                id : "id",
+                blockId : "blockId",
+                type : TransactionType.SEND,
+                timestamp : 12341234,
+                senderId : "senderId",
+                recipientId : "recipientId",
+                amount : 100,
+                fee : 5,
+                senderPublicKey : "1a2b3c",
+                signature : "c3b2a1",
+                signSignature : "123abc",
+                requesterPublicKey : "cba321",
+                signatures : ["firstSignature","secondSignature"]
+            };
+            buffers = {
+                senderPublicKey : Buffer.from(tx.senderPublicKey, "hex"),
+                signature : Buffer.from(tx.signature, "hex"),
+                requesterPublicKey : Buffer.from(tx.requesterPublicKey, "hex"),
+                signSignature : Buffer.from(tx.signSignature, "hex")
+            };
+            typeSQL = "typeSQL";
+            
+            typeInstance = {
+                dbSave : sandbox.stub().returns(typeSQL)
+            };
+
+            sandbox.stub(instance, "assertKnownTransactionType");
+            instance.types[TransactionType.SEND] = typeInstance;
+        });
+
+        it("assertKnownTransactionType called", function() {
+            instance.dbSave(tx);
+
+            expect(instance.assertKnownTransactionType.calledOnce).to.be.true;
+            expect(instance.assertKnownTransactionType.firstCall.args.length).to.be.equal(1);
+            expect(instance.assertKnownTransactionType.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("typeInsatance.dbSave called", function() {
+            instance.dbSave(tx);
+
+            expect(typeInstance.dbSave.calledOnce).to.be.true;
+            expect(typeInstance.dbSave.firstCall.args.length).to.be.equal(1);
+            expect(typeInstance.dbSave.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("compare result", function() {
+            var result = instance.dbSave(tx);
+
+            expect(result).to.be.deep.equal([{
+                table : instance.dbTable,
+                fields: instance.dbFields,
+                values: {
+                    id         : tx.id,
+                    blockId    : tx.blockId,
+                    type       : tx.type,
+                    timestamp  : tx.timestamp,
+                    senderPublicKey : buffers.senderPublicKey,
+                    requesterPublicKey : buffers.requesterPublicKey,
+                    senderId   : tx.senderId,
+                    recipientId: tx.recipientId,
+                    amount     : tx.amount,
+                    fee        : tx.fee,
+                    signature : buffers.signature,
+                    signSignature : buffers.signSignature,
+                    signatures : tx.signatures.join(','),
+                },
+            }, typeSQL]);
+        });
+    });
+
+    describe("afterSave", function() {
+        var tx;
+        var typeInstance;
+        var result;
+
+        beforeEach(function() {
+            tx = {
+                type : TransactionType.SEND
+            };
+            result = {};
+            
+            typeInstance = {
+                afterSave : sandbox.stub().returns(result)
+            };
+
+            instance.types[TransactionType.SEND] = typeInstance;
+
+            sandbox.stub(instance, "assertKnownTransactionType");
+        });
+
+        it("assertKnownTransactionType called", function() {
+            instance.afterSave(tx);
+
+            expect(instance.assertKnownTransactionType.calledOnce).to.be.true;
+            expect(instance.assertKnownTransactionType.firstCall.args.length).to.be.equal(1);
+            expect(instance.assertKnownTransactionType.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("typeInstance.afterSave called", function() {
+            instance.afterSave(tx);
+
+            expect(typeInstance.afterSave.calledOnce).to.be.true;
+            expect(typeInstance.afterSave.firstCall.args.length).to.be.equal(1);
+            expect(typeInstance.afterSave.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("check result", function() {
+            var testResult = instance.afterSave(tx);
+
+            expect(testResult).to.be.equal(result);
+        });
+    });
+
+    describe("objectNormalize", function() {
+        var tx;
+        var typeInstance;
+        var errors;
+        var result;
+
+        beforeEach(function() {
+            tx = {
+                type : TransactionType.SEND,
+                willBeDeleted : undefined
+            };
+            result = {};
+            
+            typeInstance = {
+                objectNormalize : sandbox.stub().returns(result)
+            };
+            errors = [new Error("error1"), new Error("error2")];
+
+            instance.types[TransactionType.SEND] = typeInstance;
+            scope.schema.validate.returns(true);
+            scope.schema.getLastErrors.returns(errors);
+            sandbox.stub(instance, "assertKnownTransactionType");
+        });
+
+        it("assertKnownTransactionType called", function() {
+            instance.objectNormalize(tx);
+
+            expect(instance.assertKnownTransactionType.calledOnce).to.be.true;
+            expect(instance.assertKnownTransactionType.firstCall.args.length).to.be.equal(1);
+            expect(instance.assertKnownTransactionType.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("scope.schema.validate called", function() {
+            instance.objectNormalize(tx);
+
+            expect(scope.schema.validate.calledOnce).to.be.true;
+            expect(scope.schema.validate.firstCall.args.length).to.be.equal(2);
+            expect(scope.schema.validate.firstCall.args[0]).to.be.equal(tx);
+            expect(scope.schema.validate.firstCall.args[1]).to.be.equal(txSchema);
+        });
+
+        it("validate throw error; getLastErrors called", function(done) {
+            scope.schema.validate.returns(false);
+            try {
+                instance.objectNormalize(tx);
+                done(new Error("Error should be thrown"))
+            } catch(e) {
+                expect(scope.schema.getLastErrors.calledOnce).to.be.true;
+                expect(scope.schema.getLastErrors.firstCall.args.length).to.be.equal(0);
+                done();
+            }
+        });
+
+        it("validate throw error; check error", function(done) {
+            scope.schema.validate.returns(false);
+            try {
+                instance.objectNormalize(tx);
+                done(new Error("Error should be thrown"))
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal(`Failed to validate transaction schema: ${errors.map((e) => e.message).join(', ')}`);
+                done();
+            }
+        });
+
+        it("typeInstance.objectNormalize called", function() {
+            instance.objectNormalize(tx);
+
+            expect(typeInstance.objectNormalize.calledOnce).to.be.true;
+            expect(typeInstance.objectNormalize.firstCall.args.length).to.be.equal(1);
+            expect(typeInstance.objectNormalize.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("check result", function() {
+            var testResult = instance.objectNormalize(tx);
+
+            expect(testResult).to.be.equal(result);
+        });
+    });
+
+    describe("dbRead", function() {
+        var raw;
+        var asset;
+        var typeInstance;
+        var tx;
+
+        beforeEach(function() {
+            raw = {
+                t_id                : "id",
+                b_height            : "height",
+                t_blockId           : "blockId",
+                t_type              : TransactionType.SEND,
+                t_timestamp         : 12341234,
+                t_senderPublicKey   : "senderPubKey",
+                t_requesterPublicKey: "requesterPubKey",
+                t_senderId          : "senderId",
+                t_recipientId       : "recipientId",
+                m_recipientPublicKey: "reicipientPubKey",
+                t_amount            : 200,
+                t_fee               : 5,
+                t_signature         : "signature",
+                t_signSignature     : "sign",
+                t_signatures        : "sign1,sign2",
+                confirmations       : 3
+            };
+            asset = "asset";
+
+            tx = {
+                id                : raw.t_id,
+                height            : raw.b_height,
+                blockId           : raw.b_id || raw.t_blockId,
+                type              : parseInt(raw.t_type, 10),
+                timestamp         : parseInt(raw.t_timestamp, 10),
+                senderPublicKey   : raw.t_senderPublicKey,
+                requesterPublicKey: raw.t_requesterPublicKey,
+                senderId          : raw.t_senderId,
+                recipientId       : raw.t_recipientId,
+                recipientPublicKey: raw.m_recipientPublicKey || null,
+                amount            : parseInt(raw.t_amount, 10),
+                fee               : parseInt(raw.t_fee, 10),
+                signature         : raw.t_signature,
+                signSignature     : raw.t_signSignature,
+                signatures        : raw.t_signatures ? raw.t_signatures.split(',') : [],
+                confirmations     : parseInt(raw.confirmations, 10),
+                asset             : {},
+            };
+
+            sandbox.stub(instance, "assertKnownTransactionType");
+            typeInstance = {
+                dbRead : sandbox.stub().returns(asset)
+            };
+            instance.types[TransactionType.SEND] = typeInstance;
+        });
+
+        it("null is returned if raw.t_id is not set", function() {
+            delete raw.t_id;
+
+            var result = instance.dbRead(raw);
+
+            expect(result).to.be.null;
+        });
+
+        it("assertKnownTransactionType is called", function() {
+            instance.dbRead(raw);
+
+            tx.asset = asset;
+            expect(instance.assertKnownTransactionType.calledOnce).to.be.true;
+            expect(instance.assertKnownTransactionType.firstCall.args.length).to.be.equal(1);
+            expect(instance.assertKnownTransactionType.firstCall.args[0]).to.be.deep.equal(tx);
+        });
+
+        it("typeInstance.dbRead is called", function() {
+            instance.dbRead(raw);
+
+            tx.asset = asset;
+            expect(typeInstance.dbRead.calledOnce).to.be.true;
+            expect(typeInstance.dbRead.firstCall.args.length).to.be.equal(1);
+            expect(typeInstance.dbRead.firstCall.args[0]).to.be.equal(raw);
+        });
+
+        it("compare result; asset is set", function() {
+            var result = instance.dbRead(raw);
+            tx.asset = asset;
+            expect(result).to.be.deep.equal(tx);
+        });
+
+        it("compare result; asset is not set", function() {
+            typeInstance.dbRead.returns(null);
+            var result = instance.dbRead(raw);
+            expect(result).to.be.deep.equal(tx);
         });
     });
 });
