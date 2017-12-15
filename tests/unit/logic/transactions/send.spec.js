@@ -1,193 +1,271 @@
 'use strict';
 
 const chai                = require("chai");
-let chaiAsPromised        = require("chai-as-promised");
+const chaiAsPromised      = require("chai-as-promised");
+chai.use(chaiAsPromised);
 const expect              = chai.expect;
 const sinon               = require("sinon");
-const rewire              = require("rewire");
-const SendTransaction     = require("../../../../logic/transactions/send").SendTransaction;
-const BaseTransactionType = require("../../../../logic/transactions/baseTransactionType").BaseTransactionType;
+const path                = require("path");
+const rootDir             = path.join(__dirname, "../../../..");
 
-chai.use(chaiAsPromised);
+const SendTransaction     = require(path.join(rootDir, "src/logic/transactions/send")).SendTransaction;
+const BaseTransactionType = require(path.join(rootDir, "src/logic/transactions/baseTransactionType")).BaseTransactionType;
 
-
-describe("logic/transfer", () => {
-  let accounts, system, rounds, instance, tx, sender, block;
-
-  beforeEach(() => {
-    accounts = {
-      setAccountAndGet  : sinon.stub().callsArg(1),
-      mergeAccountAndGet: sinon.stub().callsArg(1)
-    };
-    system   = {
-      getFees: sinon.stub().returns({
-        fees: {
-          send: 1
-        }
-      })
-    };
-    rounds   = {
-      calc: sinon.stub().returns(10)
-    };
-    tx       = {
-      recipientId: 'carbonara',
-      amount     : 10
-    };
-    sender   = {};
-    block    = {
-      id    : 'carbonara',
-      height: 'tall'
-    };
-    instance = new SendTransaction();
-    instance.bind(accounts, rounds, system);
-  });
-
-  describe("when is instantiated", () => {
-    it("is instanceof BaseTransactionType", () => {
-      expect(new SendTransaction()).is.an.instanceof(BaseTransactionType);
-    });
-  });
-
-  describe("bind", () => {
-    it("modules are correctly set up", () => {
-      let expectedModules = {
-        accounts,
-        rounds,
-        system
-      };
-      expect(instance.modules).to.deep.equal(expectedModules);
-    });
-  });
-
-  describe("calculateFee", () => {
-    it("calls getFees", () => {
-      instance.calculateFee({}, {}, 10);
-      expect(system.getFees.calledOnce).to.be.true;
-      expect(system.getFees.firstCall.args.length).to.equal(1);
-      expect(system.getFees.firstCall.args[0]).to.equal(10);
-    });
-  });
-
-  describe("verify", () => {
-    it("throws Missing recipient when !tx.recipientId", () => {
-      expect(instance.verify({}, sender)).to.be.rejectedWith('Missing recipient');
+describe("logic/transactions/send", () => {
+    const sandbox = sinon.sandbox.create({
+        injectInto: null,
+        properties: ["spy", "stub", "clock"],
+        useFakeTimers: true,
+        useFakeServer: false
     });
 
-    it("throws Invalid transaction amount when tx.amount <= 0", () => {
-      tx.amount = 0;
-      expect(instance.verify(tx, sender)).to.be.rejectedWith('Invalid transaction amount');
-    });
-    it("executes successfully", () => {
-      expect(instance.verify(tx, sender)).to.be.fulfilled;
-    });
-  });
+    let instance;
+    let modules;
 
-  describe("apply", () => {
-    it("setAccountAndGet is called and throws error", () => {
-      accounts.setAccountAndGet.rejects('error');
-      instance.bind(accounts, rounds, system);
+    beforeEach(() => {
+        modules = {
+            accounts : {
+                setAccountAndGet  : sandbox.stub(),
+                mergeAccountAndGet: sandbox.stub()
+            },
+            rounds : {
+                calcRound: sandbox.stub()
+            },
+            system : {
+                getFees: sandbox.stub()
+            }
+        };
 
-      expect(instance.apply(tx, block, sender)).to.be.rejectedWith('error');
+        instance = new SendTransaction();
+        instance.bind(modules.accounts, modules.rounds, modules.system);
     });
-    it("setAccountAndGet is called and executes successfully", () => {
-      return expect(instance.apply(tx, block, sender)).to.be.fulfilled
-        .then(() => {
-          expect(accounts.setAccountAndGet.calledOnce).to.be.true;
-          expect(accounts.setAccountAndGet.firstCall.args.length).to.equal(2);
-          expect(accounts.setAccountAndGet.firstCall.args[0]).to.deep.equal({ address: tx.recipientId });
-          expect(accounts.setAccountAndGet.firstCall.args[1]).to.be.a('function');
+
+    describe("constructor", () => {
+        it("should be a function", () => {
+            expect(SendTransaction).to.be.a("function");
         });
 
-    });
-    it("mergeAccountAndGet is called and rejected the promise", () => {
-      accounts.mergeAccountAndGet.callsArgWith(1, new Error('Error'));
-
-      return expect(instance.apply(tx, block, sender)).to.be.rejectedWith('Error');
-    });
-    it("mergeAccountAndGet is called and executes successfully", () => {
-      return expect(instance.apply(tx, block, sender)).to.be.fulfilled
-        .then(() => {
-          expect(rounds.calc.calledOnce).to.be.true;
-          expect(rounds.calc.firstCall.args.length).to.equal(1);
-          expect(rounds.calc.firstCall.args[0]).to.equal(block.height);
-
-          expect(accounts.mergeAccountAndGet.calledOnce).to.be.true;
-          expect(accounts.mergeAccountAndGet.firstCall.args.length).to.equal(2);
-          expect(accounts.mergeAccountAndGet.firstCall.args[0]).to.deep.equal({
-            address  : tx.recipientId,
-            balance  : tx.amount,
-            blockId  : block.id,
-            round    : 10,
-            u_balance: tx.amount,
-          });
-          expect(accounts.mergeAccountAndGet.firstCall.args[1]).to.be.a('function');
+        it("should be instance of SendTransaction", () => {
+            expect(instance).to.be.instanceof(SendTransaction);
         });
 
+        it("should be instance of SendTransaction", () => {
+            expect(instance).to.be.instanceof(BaseTransactionType);
+        });
     });
-  });
 
-  describe("undo", () => {
-    it("setAccountAndGet is called and throws error", () => {
-      accounts.setAccountAndGet.rejects('error');
-      instance.bind(accounts, rounds, system);
+    describe("bind", () => {
+        it("modules are correctly set up", () => {
+            expect(instance.modules).to.have.property("accounts");
+            expect(instance.modules).to.have.property("rounds");
+            expect(instance.modules).to.have.property("system");
 
-      expect(instance.undo(tx, block, sender)).to.be.rejectedWith('error');
+            expect(instance.modules.accounts).to.be.equal(modules.accounts);
+            expect(instance.modules.rounds).to.be.equal(modules.rounds);
+            expect(instance.modules.system).to.be.equal(modules.system);
+        });
     });
-    it("setAccountAndGet is called and executes successfully", () => {
 
-      expect(instance.undo(tx, block, sender)).to.be.fulfilled;
-      expect(accounts.setAccountAndGet.calledOnce).to.be.true;
-      expect(accounts.setAccountAndGet.firstCall.args.length).to.equal(2);
-      expect(accounts.setAccountAndGet.firstCall.args[0]).to.deep.equal({ address: tx.recipientId });
-      expect(accounts.setAccountAndGet.firstCall.args[1]).to.be.a('function');
+    describe("calculateFee", () => {
+        it("calls getFees", () => {
+            let height = "height";
+            let fee = { fees : { send : 10 } };
+            modules.system.getFees.returns(fee);
+
+            const result = instance.calculateFee({}, {}, height);
+
+            expect(modules.system.getFees.calledOnce).to.be.true;
+            expect(modules.system.getFees.firstCall.args.length).to.equal(1);
+            expect(modules.system.getFees.firstCall.args[0]).to.equal(height);
+
+            expect(result).to.be.equal(fee.fees.send);
+        });
     });
-    it("mergeAccountAndGet is called and rejects the promise", () => {
-      accounts.mergeAccountAndGet.rejects('error');
-      instance.bind(accounts, rounds, system);
 
-      expect(instance.undo(tx, block, sender)).to.be.rejectedWith('error');
-    });
-    it("mergeAccountAndGet is called and executes successfully", () => {
+    describe("verify", () => {
+        const tx = {
+            recipientId : "id"
+        };
+        const sender;
 
-      return expect(instance.undo(tx, block, sender)).to.be.fulfilled
-        .then(() => {
-          expect(rounds.calc.calledOnce).to.be.true;
-          expect(rounds.calc.firstCall.args.length).to.equal(1);
-          expect(rounds.calc.firstCall.args[0]).to.equal(block.height);
-
-
-          expect(accounts.mergeAccountAndGet.calledOnce).to.be.true;
-          expect(accounts.mergeAccountAndGet.firstCall.args.length).to.equal(2);
-          expect(accounts.mergeAccountAndGet.firstCall.args[0]).to.deep.equal({
-            address  : tx.recipientId,
-            balance  : -tx.amount,
-            blockId  : block.id,
-            round    : 10,
-            u_balance: -tx.amount,
-          });
-          expect(accounts.mergeAccountAndGet.firstCall.args[1]).to.be.a('function');
+        it("throws Missing recipient when !tx.recipientId", (done) => {
+            expect(instance.verify({}, sender)).to.be.rejectedWith('Missing recipient').notify(done);
         });
 
+        it("throws Invalid transaction amount when tx.amount <= 0", (done) => {
+            tx.amount = 0;
+            expect(instance.verify(tx, sender)).to.be.rejectedWith('Invalid transaction amount').notify(done);
+        });
+        it("executes successfully", (done) => {
+            tx.amount = 100;
+            expect(instance.verify(tx, sender)).to.be.fulfilled.notify(done);
+        });
     });
-  });
 
-  describe("objectNormalize", () => {
-    it("returns the tx", () => {
-      expect(instance.objectNormalize(tx)).to.deep.equal(tx);
-    });
-  });
+    describe("apply", () => {
+        let tx;
+        let block;
+        let sender;
+        let round;
 
-  describe("dbRead", () => {
-    it("returns null", () => {
-      expect(instance.dbRead()).to.deep.equal(null);
-    });
-  });
+        beforeEach(() => {
+            tx = {
+                recipientId : "id",
+                amount : 100
+            };
+            block = {
+                id : "someId",
+                height : "height"
+            };
+            sender = {};
+            round = {};
 
-  describe("dbSave", () => {
-    it("returns null", () => {
-      expect(instance.dbSave()).to.deep.equal(null);
+            modules.accounts.setAccountAndGet.resolves();
+            modules.accounts.mergeAccountAndGet.resolves();
+            modules.rounds.calcRound.returns(round);
+        });
+
+        it("setAccountAndGet is called and throws error", (done) => {
+            const error = new Error("error");
+            modules.accounts.setAccountAndGet.rejects(error);
+
+            expect(instance.apply(tx, block, sender)).to.be.rejectedWith(error).notify(done);
+        });
+
+        it("setAccountAndGet is called and executes successfully", (done) => {
+            instance.apply(tx, block, sender).then(() => {
+                expect(modules.accounts.setAccountAndGet.calledOnce).to.be.true;
+                expect(modules.accounts.setAccountAndGet.firstCall.args.length).to.equal(1);
+                expect(modules.accounts.setAccountAndGet.firstCall.args[0]).to.deep.equal({ address: tx.recipientId });
+                done();
+            }).catch(done);
+        });
+
+        it("mergeAccountAndGet is called and rejected the promise", (done) => {
+            const error = new Error("error");
+            modules.accounts.mergeAccountAndGet.rejects(error);
+
+            expect(instance.apply(tx, block, sender)).to.be.rejectedWith(error).notify(done);
+        });
+
+        it("mergeAccountAndGet is called and executes successfully", (done) => {
+            instance.apply(tx, block, sender).then(() => {
+                expect(modules.rounds.calcRound.calledOnce).to.be.true;
+                expect(modules.rounds.calcRound.firstCall.args.length).to.equal(1);
+                expect(modules.rounds.calcRound.firstCall.args[0]).to.equal(block.height);
+
+                expect(modules.accounts.mergeAccountAndGet.calledOnce).to.be.true;
+                expect(modules.accounts.mergeAccountAndGet.firstCall.args.length).to.equal(1);
+                expect(modules.accounts.mergeAccountAndGet.firstCall.args[0]).to.deep.equal({
+                    address  : tx.recipientId,
+                    balance  : tx.amount,
+                    blockId  : block.id,
+                    round    : round,
+                    u_balance: tx.amount,
+                });
+                done();
+            }).catch(done);
+        });
+
+        it("check result", done => {
+            instance.apply(tx, block, sender).then(result => {
+                expect(result).to.be.undefined;
+                done();
+            }).catch(done);
+        });
     });
-  });
+
+    describe("undo", () => {
+        let tx;
+        let block;
+        let sender;
+        let round;
+
+        beforeEach(() => {
+            tx = {
+                recipientId : "id",
+                amount : 100
+            };
+            block = {
+                id : "someId",
+                height : "height"
+            };
+            sender = {};
+            round = {};
+
+            modules.accounts.setAccountAndGet.resolves();
+            modules.accounts.mergeAccountAndGet.resolves();
+            modules.rounds.calcRound.returns(round);
+        });
+
+        it("setAccountAndGet is called and throws error", (done) => {
+            const error = new Error("error");
+            modules.accounts.setAccountAndGet.rejects(error);
+
+            expect(instance.undo(tx, block, sender)).to.be.rejectedWith(error).notify(done);
+        });
+
+        it("setAccountAndGet is called and executes successfully", (done) => {
+            instance.undo(tx, block, sender).then(() => {
+                expect(modules.accounts.setAccountAndGet.calledOnce).to.be.true;
+                expect(modules.accounts.setAccountAndGet.firstCall.args.length).to.equal(1);
+                expect(modules.accounts.setAccountAndGet.firstCall.args[0]).to.deep.equal({ address: tx.recipientId });
+                done();
+            }).catch(done);
+        });
+
+        it("mergeAccountAndGet is called and rejects the promise", done => {
+            const error = new Error("error");
+            modules.accounts.mergeAccountAndGet.rejects(error);
+
+            expect(instance.undo(tx, block, sender)).to.be.rejectedWith(error).notify(done);
+        });
+
+        it("mergeAccountAndGet is called and executes successfully", (done) => {
+            instance.undo(tx, block, sender).then(() => {
+                expect(modules.rounds.calcRound.calledOnce).to.be.true;
+                expect(modules.rounds.calcRound.firstCall.args.length).to.equal(1);
+                expect(modules.rounds.calcRound.firstCall.args[0]).to.equal(block.height);
+
+                expect(modules.accounts.mergeAccountAndGet.calledOnce).to.be.true;
+                expect(modules.accounts.mergeAccountAndGet.firstCall.args.length).to.equal(1);
+                expect(modules.accounts.mergeAccountAndGet.firstCall.args[0]).to.deep.equal({
+                    address  : tx.recipientId,
+                    balance  : -tx.amount,
+                    blockId  : block.id,
+                    round    : round,
+                    u_balance: -tx.amount,
+                });
+                done();
+            }).catch(done);
+        });
+
+        it("check result", done => {
+            instance.undo(tx, block, sender).then(result => {
+                expect(result).to.be.undefined;
+                done();
+            }).catch(done);
+        });
+    });
+
+    describe("objectNormalize", () => {
+        const tx = {};
+        it("returns the tx", () => {
+            expect(instance.objectNormalize(tx)).to.equal(tx);
+        });
+    });
+
+    describe("dbRead", () => {
+        it("returns null", () => {
+            expect(instance.dbRead()).to.deep.equal(null);
+        });
+    });
+
+    describe("dbSave", () => {
+        it("returns null", () => {
+            expect(instance.dbSave()).to.deep.equal(null);
+        });
+    });
 
 
 });
