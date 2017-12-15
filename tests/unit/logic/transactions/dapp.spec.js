@@ -8,41 +8,58 @@ var valid_url = require("valid-url");
 var rootDir = path.join(__dirname, "../../../..");
 
 var sql = require(path.join(rootDir, "sql/logic/transactions/dapps")).default;
-var dappSchema = require(path.join(rootDir, "schema/logic/transactions/dapp")).default;
-var constants = require(path.join(rootDir, "helpers/constants")).default;
-var exceptions = require(path.join(rootDir, "helpers/exceptions"));
-var DappModule = rewire(path.join(rootDir, "logic/transactions/dapp"));
+var dappSchema = require(path.join(rootDir, "src/schema/logic/transactions/dapp")).default;
+var constants = require(path.join(rootDir, "src/helpers/constants")).default;
+var exceptions = require(path.join(rootDir, "src/helpers/exceptions"));
+var DappModule = rewire(path.join(rootDir, "src/logic/transactions/dapp"));
 var Dapp = DappModule.DappTransaction;
+var DappCategory = require(path.join(rootDir, "src/helpers/dappCategories")).DappCategory;
 
 describe("modules/dapp", function() {
-    var callback,
-        schema,
-		network,
-		logger,
-		db,
-		trs,
-		sender,
-		system;
+    var sandbox;
+    var library;
+    var modules;
+    var instance;
 
-	beforeEach(function() {
-		schema = {
-            validate : sinon.stub(),
-            getLastErrors : sinon.stub()
+    var trs;
+    var sender;
+
+    before(function() {
+        sandbox = sinon.sandbox.create({
+            injectInto: null,
+            properties: ["spy", "stub", "clock"],
+            useFakeTimers: true,
+            useFakeServer: false
+        });
+    });
+
+    beforeEach(function() {
+        library = {
+            db : {
+                query: sandbox.stub().resolves(true)
+            },
+            logger : {
+                error: sandbox.stub()
+            },
+            schema : {
+                validate : sandbox.stub(),
+                getLastErrors : sandbox.stub()
+            },
+            network : {
+                io: {
+                    sockets: {
+                        emit: sandbox.stub()
+                    }
+                }
+            }
         };
-		network = {
-			io: {
-				sockets: {
-					emit: sinon.stub()
-				}
-			}
-		};
-		logger = {
-			error: sinon.stub()
-		};
-		db = {
-			query: sinon.stub().resolves(true)
-		};
-		trs = {
+        modules = {
+            system : {
+                getFees : sandbox.stub()
+            }
+        };
+/*
+        trs = {
 			amount: 0,
 			asset: {
 				dapp: {
@@ -60,13 +77,17 @@ describe("modules/dapp", function() {
 		sender = {
 			multisignatures: ["1", "2"]
 		};
-		system = {};
-		instance = new Dapp({ db, logger, schema, network });
+        */
+		instance = new Dapp(library);
+        instance.bind(modules.system);
 	});
 
     afterEach(function() {
-        schema.validate.reset();
-        logger.error.reset();
+        sandbox.reset();
+    });
+
+    after(function() {
+        sandbox.restore();
     });
 
 	describe("constructor", function() {
@@ -75,87 +96,174 @@ describe("modules/dapp", function() {
 		});
 
 		it("check library", function() {
-			var expectedLibrary = {
-				db: db,
-				logger: logger,
-				schema: schema,
-				network: network
-			};
-
-			expect(instance.library).to.deep.equal(expectedLibrary);
+			expect(instance.library).to.deep.equal(library);
 		});
 	});
 
 	describe("bind", function() {
 		it("binds modules", function() {
-			var expectedModules;
-			expectedModules = {
-				system: system
-			};
-
-			instance.bind(system);
-
-			expect(instance.modules).to.deep.equal(expectedModules);
+			expect(instance.modules).to.deep.equal(modules);
 		});
 	});
 
 	describe("calculateFee", function() {
+        var tx;
+        var sender;
+        var height;
+        var response;
+
+        beforeEach(function() {
+            height = "height";
+            response = {
+                fees : {
+                    dapp : {}
+                }
+            };
+
+            modules.system.getFees.returns(response);
+        });
+
+        it("modules.system.getFees is called", function() {
+            instance.calculateFee(tx, sender, height);
+
+            expect(modules.system.getFees.calledOnce).to.be.true;
+            expect(modules.system.getFees.firstCall.args.length).to.be.equal(1);
+            expect(modules.system.getFees.firstCall.args[0]).to.be.equal(height);
+        });
+
 		it("returns correct trs", function() {
-			var trs, modules, getFees, height;
+			var result = instance.calculateFee(tx, sender, height);
 
-			height = 10;
-			trs = {
-				asset: {
-					multisignature: {
-						keysgroup: [1, 2, 3]
-					}
+			expect(result).to.equal(response.fees.dapp);
+		});
+	});
+
+	describe("getBytes", function() {
+        var tx;
+
+        var BBTemp;
+        var BBStub;
+        var BBInstance;
+        var BBBuffer;
+
+        before(function() {
+            BBTemp = DappModule.__get__("ByteBuffer");
+            BBStub = sandbox.stub();
+            DappModule.__set__("ByteBuffer", BBStub);
+
+            sandbox.spy(Buffer, "from");
+            sandbox.spy(Buffer, "concat");
+        });
+
+		beforeEach(function() {
+            tx = {
+                asset : {
+                    dapp : {
+                        name : "name",
+                        description : "description",
+                        tags : "tags",
+                        link : "link",
+                        icon : "icon",
+                        type : "type",
+                        category : "category",
+                    }
                 }
             };
-            instance.modules = {
-                system : {
-                    getFees: sinon.stub().returns({
-                        fees: {
-                            dapp: 1
-                        }
-                    }) 
-                }
+
+            BBBuffer = new Buffer("temp");
+            BBInstance = {
+                writeInt : sandbox.stub(),
+                flip : sandbox.stub(),
+                toBuffer : sandbox.stub().returns(BBBuffer)
             };
+            Buffer.from.reset();
+            BBStub.returns(BBInstance);
+		});
 
-			var retVal = instance.calculateFee(trs, null, height);
+		after(function() {
+            DappModule.__set__("ByteBuffer", BBTemp);
+			Buffer.from.restore();
+            Buffer.concat.restore();
+		});
 
-			expect(retVal).to.deep.equal(1);
-			expect(instance.modules.system.getFees.calledOnce).to.be.true;
-			expect(instance.modules.system.getFees.firstCall.args.length).to.equal(1);
-			expect(instance.modules.system.getFees.firstCall.args[0]).to.equal(height);
+        it("Buffer.from called", function() {
+            instance.getBytes(tx);
+
+            expect(Buffer.from.callCount).to.be.equal(5);
+            expect(Buffer.from.getCall(0).args.length).to.be.equal(2);
+            expect(Buffer.from.getCall(0).args.length).to.be.equal(2);
+            expect(Buffer.from.getCall(0).args[0]).to.be.equal(tx.asset.dapp.name);
+            expect(Buffer.from.getCall(0).args[1]).to.be.equal("utf8");
+            expect(Buffer.from.getCall(1).args[0]).to.be.equal(tx.asset.dapp.description);
+            expect(Buffer.from.getCall(1).args[1]).to.be.equal("utf8");
+            expect(Buffer.from.getCall(2).args[0]).to.be.equal(tx.asset.dapp.tags);
+            expect(Buffer.from.getCall(2).args[1]).to.be.equal("utf8");
+            expect(Buffer.from.getCall(3).args[0]).to.be.equal(tx.asset.dapp.link);
+            expect(Buffer.from.getCall(3).args[1]).to.be.equal("utf8");
+            expect(Buffer.from.getCall(4).args[0]).to.be.equal(tx.asset.dapp.icon);
+            expect(Buffer.from.getCall(4).args[1]).to.be.equal("utf8");
+        });
+
+        it("ByteBuffer created", function() {
+            instance.getBytes(tx);
+        
+            expect(BBStub.calledOnce).to.be.true;
+            expect(BBStub.firstCall.calledWithNew()).to.be.true;
+            expect(BBStub.firstCall.args.length).to.be.equal(2);
+            expect(BBStub.firstCall.args[0]).to.be.equal(8);
+            expect(BBStub.firstCall.args[1]).to.be.equal(true);
+
+            expect(BBInstance.writeInt.calledTwice).to.be.true;
+            expect(BBInstance.writeInt.firstCall.args.length).to.be.equal(1);
+            expect(BBInstance.writeInt.firstCall.args[0]).to.be.equal(tx.asset.dapp.type);
+            expect(BBInstance.writeInt.secondCall.args.length).to.be.equal(1);
+            expect(BBInstance.writeInt.secondCall.args[0]).to.be.equal(tx.asset.dapp.category);
+
+            expect(BBInstance.flip.calledOnce).to.be.true;
+            expect(BBInstance.flip.firstCall.args.length).to.be.equal(0);
+
+            expect(BBInstance.toBuffer.calledOnce).to.be.true;
+            expect(BBInstance.toBuffer.firstCall.args.length).to.be.equal(0);
+        });
+
+		it("returns buffer", function() {
+            var buffer = Buffer.from(tx.asset.dapp.name, 'utf8');
+            buffer = Buffer.concat([buffer, Buffer.from(tx.asset.dapp.description, 'utf8')]);
+            buffer = Buffer.concat([buffer, Buffer.from(tx.asset.dapp.tags, 'utf8')]);
+            buffer = Buffer.concat([buffer, Buffer.from(tx.asset.dapp.link, 'utf8')]);
+            buffer = Buffer.concat([buffer, Buffer.from(tx.asset.dapp.icon, 'utf8')]);
+
+            var result = instance.getBytes(tx);
+
+            expect(result).to.be.deep.equal(Buffer.concat([buffer, BBBuffer]));
 		});
 	});
 
 	describe("verify", function() {
-		var ready, library, Buffer, from, isUri, tempTrs;
+		var tx;
+        var sender;
 
 		beforeEach(function() {
-            tempTrs = {};
-			Object.assign(tempTrs, trs);
-			sender = {
-				multisignatures: false
-			};
-			ready = sinon.stub(instance, "ready").returns(true);
-			Buffer = DappModule.__get__("Buffer");
-			from = sinon.stub(Buffer, "from").returns([]);
-			DappModule.__set__("Buffer", Buffer);
-			isUri = sinon.spy(valid_url, "isUri");
-		});
-
-		afterEach(function() {
-			ready.restore();
-			from.restore();
-			isUri.restore();
+            tx = {
+                id : "id",
+                amount : 0,
+                asset : {
+                    dapp : {
+                        category : 0,
+                        type : 1,
+                        link : "https://alessio.rocks/archive.zip",
+                        name : "Some name",
+                        description : "Some description"
+                    }
+                }
+            };
+            sender = {};
 		});
 
 		it("returns 'Invalid recipient'", function(done) {
-			tempTrs.recipientId = "carbonara";
-            instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+            tx.recipientId = "recipientId";
+            instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Invalid recipient");
@@ -164,9 +272,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Invalid transaction amount'", function(done) {
-			tempTrs.amount = 1;
-			instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.amount = 1;
+			instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Invalid transaction amount");
@@ -175,9 +283,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Invalid transaction asset'", function(done) {
-            delete tempTrs.asset;
-            instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+            delete tx.asset;
+            instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Invalid transaction asset");
@@ -186,8 +294,8 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Invalid application category'", function(done) {
-            tempTrs.asset.dapp.category = null;
-            instance.verify(tempTrs, sender).then(() => {
+            tx.asset.dapp.category = null;
+            instance.verify(tx, sender).then(() => {
                 done(new Error("Should rejects"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
@@ -197,9 +305,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Application category not found'", function(done) {
-			tempTrs.asset.dapp.category = 99;
-            instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.category = 99;
+            instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Application category not found");
@@ -208,9 +316,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Invalid application icon link'", function(done) {
-			tempTrs.asset.dapp.icon = "alessio.rocks";
-		    instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.icon = "alessio.rocks";
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Invalid application icon link");
@@ -219,9 +327,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Invalid application icon file type'", function(done) {
-			tempTrs.asset.dapp.icon = "https://alessio.rocks/img";
-            instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.icon = "https://alessio.rocks/img";
+            instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Invalid application icon file type");
@@ -230,9 +338,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Invalid application type'", function(done) {
-			tempTrs.asset.dapp.type = 10;
-            instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.type = 10;
+            instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Invalid application type");
@@ -241,9 +349,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Invalid application link'", function(done) {
-			tempTrs.asset.dapp.link = "carbonara";
-		    instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.link = "carbonara";
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Invalid application link");
@@ -252,9 +360,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Invalid application file type'", function(done) {
-			tempTrs.asset.dapp.link = "https://alessio.rocks/img/carbonara_bro.jpeg";
-		    instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.link = "https://alessio.rocks/img/carbonara_bro.jpeg";
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Invalid application file type");
@@ -263,9 +371,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Application name must not be blank'", function(done) {
-			tempTrs.asset.dapp.name = undefined;
-		    instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.name = undefined;
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Application name must not be blank or contain leading or trailing space");
@@ -273,11 +381,21 @@ describe("modules/dapp", function() {
             });
 		});
 
+		it("returns 'Application name must not contain leading or trailing space'", function(done) {
+			tx.asset.dapp.name = " Name ";
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
+            }).catch(err => {
+                expect(err).to.be.instanceof(Error);
+                expect(err.message).to.equal("Application name must not contain leading or trailing space");
+                done();
+            });
+		});
+
 		it("returns 'Application name is too long. Maximum is 32 characters'", function(done) {
-			tempTrs.asset.dapp.name =
-				"CarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonara";
-            instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.name = "CarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonara";
+            instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Application name is too long. Maximum is 32 characters");
@@ -286,10 +404,10 @@ describe("modules/dapp", function() {
         });
 
 		it("returns 'Application description is too long. Maximum is 160 characters'", function(done) {
-			tempTrs.asset.dapp.description =
+			tx.asset.dapp.description =
 				"CarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonara";
-            instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+            instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Application description is too long. Maximum is 160 characters");
@@ -298,9 +416,9 @@ describe("modules/dapp", function() {
         });
 
 		it("returns 'Application tags is too long. Maximum is 160 characters'", function(done) {
-			tempTrs.asset.dapp.tags =
+			tx.asset.dapp.tags =
 				"CarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonaraCarbonara";
-		    instance.verify(tempTrs, sender).then(() => {
+		    instance.verify(tx, sender).then(() => {
                 done(new Error("Should rejects"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
@@ -310,9 +428,9 @@ describe("modules/dapp", function() {
 		});
 
 		it("returns 'Encountered duplicate tag: Carbonara in application'", function(done) {
-			tempTrs.asset.dapp.tags = "Carbonara, Carbonara";
-		    instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
+			tx.asset.dapp.tags = "Carbonara, Carbonara";
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
             }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Encountered duplicated tags: Carbonara in application");
@@ -320,43 +438,44 @@ describe("modules/dapp", function() {
             });
 		});
 
-		it("catches the rejection from db.query", function(done) {
-            var error = "error";
-			db.query.rejects(new Error(error));
-		    instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
-            }).catch(err => {
-                expect(db.query.calledOnce).to.be.true;
-                expect(db.query.firstCall.args.length).to.equal(2);
-                expect(db.query.firstCall.args[0]).to.equal(sql.getExisting);
-                expect(db.query.firstCall.args[1]).to.deep.equal({
-                    name: trs.asset.dapp.name,
-                    link: trs.asset.dapp.link,
-                    transactionId: trs.id
+        it("library.db.query is called", function(done) {
+            library.db.query.resolves([]);
+		    instance.verify(tx, sender).then(() => {
+                expect(library.db.query.calledOnce).to.be.true;
+                expect(library.db.query.firstCall.args.length).to.equal(2);
+                expect(library.db.query.firstCall.args[0]).to.equal(sql.getExisting);
+                expect(library.db.query.firstCall.args[1]).to.deep.equal({
+                    name: tx.asset.dapp.name,
+                    link: tx.asset.dapp.link,
+                    transactionId: tx.id
                 });
+                done();
+            }).catch(error => {
+                done(error);
+            });
+        });
 
+		it("catches the rejection from db.query", function(done) {
+            var error = new Error("error");
+			library.db.query.rejects(error);
+
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
+            }).catch(err => {
                 expect(err).to.be.instanceof(Error);
-                expect(err.message).to.equal("error");
+                expect(err).to.equal(error);
                 done();
             });
         });
 
         it("Dapp exists with the same name", function(done) {
-            db.query.resolves([{
-                name: "CarbonaraDapp"
+            library.db.query.resolves([{
+                name : tx.asset.dapp.name
             }]);
-		    instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
-            }).catch(err => {
-                expect(db.query.calledOnce).to.be.true;
-                expect(db.query.firstCall.args.length).to.equal(2);
-                expect(db.query.firstCall.args[0]).to.equal(sql.getExisting);
-                expect(db.query.firstCall.args[1]).to.deep.equal({
-                    name: trs.asset.dapp.name,
-                    link: trs.asset.dapp.link,
-                    transactionId: trs.id
-                });
 
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
+            }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Application name already exists");
                 done();
@@ -364,21 +483,13 @@ describe("modules/dapp", function() {
 		});
 
 		it("Dapp exists with the same link", function(done) {
-            db.query.resolves([{
-                link: "https://alessio.rocks/app.zip"
+            library.db.query.resolves([{
+                link : tx.asset.dapp.link
             }]);
-		    instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
-            }).catch(err => {
-                expect(db.query.calledOnce).to.be.true;
-                expect(db.query.firstCall.args.length).to.equal(2);
-                expect(db.query.firstCall.args[0]).to.equal(sql.getExisting);
-                expect(db.query.firstCall.args[1]).to.deep.equal({
-                    name: trs.asset.dapp.name,
-                    link: trs.asset.dapp.link,
-                    transactionId: trs.id
-                });
 
+		    instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
+            }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Application link already exists");
                 done();
@@ -386,21 +497,11 @@ describe("modules/dapp", function() {
 		});
 
         it("Dapp exists", function(done) {
-            db.query.resolves([{
-                itExists: true
-            }]);
-			instance.verify(tempTrs, sender).then(() => {
-                done(new Error("Should rejects"));
-            }).catch(err => {
-                expect(db.query.calledOnce).to.be.true;
-                expect(db.query.firstCall.args.length).to.equal(2);
-                expect(db.query.firstCall.args[0]).to.equal(sql.getExisting);
-                expect(db.query.firstCall.args[1]).to.deep.equal({
-                    name: trs.asset.dapp.name,
-                    link: trs.asset.dapp.link,
-                    transactionId: trs.id
-                });
+            library.db.query.resolves([{}]);
 
+			instance.verify(tx, sender).then(() => {
+                done(new Error("Should be rejected"));
+            }).catch(err => {
                 expect(err).to.be.instanceof(Error);
                 expect(err.message).to.equal("Application already exists");
                 done();
@@ -408,8 +509,8 @@ describe("modules/dapp", function() {
 		});
 
 		it("Success no dapp, db.query resolved, call cb", function(done) {
-			db.query.resolves([]);
-			instance.verify(tempTrs, sender).then(function(testResult) {
+			library.db.query.resolves([]);
+			instance.verify(tx, sender).then(function(testResult) {
                 expect(testResult).to.be.undefined;
                 done();
             }).catch(function(err) {
@@ -418,51 +519,28 @@ describe("modules/dapp", function() {
 		});
 	});
 
-	describe("getBytes", function() {
-		var from;
-		// var outputBuffer = Buffer.from([]);
-
-        before(function() {
-            BufferModule = DappModule.__get__("Buffer");
-			from = sinon.spy(BufferModule, "from");
-        });
-
-		beforeEach(function() {
-            from.reset();
-		});
-
-		after(function() {
-			from.restore();
-		});
-
-		it("returns buffer", function() {
-            var retVal = instance.getBytes(trs);
-            expect(from.callCount).to.equal(5);
-            expect(from.getCall(0).args.length).to.equal(2);
-			expect(from.getCall(0).args[0]).to.equal(trs.asset.dapp.name);
-			expect(from.getCall(0).args[1]).to.equal("utf8");
-			expect(from.getCall(1).args.length).to.equal(2);
-			expect(from.getCall(1).args[0]).to.equal(trs.asset.dapp.description);
-			expect(from.getCall(1).args[1]).to.equal("utf8");
-			expect(from.getCall(2).args.length).to.equal(2);
-			expect(from.getCall(2).args[0]).to.equal(trs.asset.dapp.tags);
-			expect(from.getCall(2).args[1]).to.equal("utf8");
-			expect(from.getCall(3).args.length).to.equal(2);
-			expect(from.getCall(3).args[0]).to.equal(trs.asset.dapp.link);
-			expect(from.getCall(3).args[1]).to.equal("utf8");
-			expect(from.getCall(4).args.length).to.equal(2);
-			expect(from.getCall(4).args[0]).to.equal(trs.asset.dapp.icon);
-			expect(from.getCall(4).args[1]).to.equal("utf8");
-			expect(retVal).to.be.instanceOf(Buffer);
-		});
-	});
 
 	describe("applyUnconfirmed", function() {
-		it("returns error Application name already exists", function(done) {
-            instance.unconfirmedNames.CarbonaraDapp = true;
+        var tx;
+        var sender;
 
-			instance.applyUnconfirmed(trs, sender).then(function() {
-                done(new Error("Should rejects"));
+        beforeEach(function() {
+            tx = {
+                asset : {
+                    dapp : {
+                        name : "name",
+                        link : "link"
+                    }
+                }
+            };
+            sender = {};
+        });
+
+		it("returns error Application name already exists", function(done) {
+            instance.unconfirmedNames[tx.asset.dapp.name] = true;
+
+			instance.applyUnconfirmed(tx, sender).then(function() {
+                done(new Error("Should be rejected"));
             }).catch(function(error) {
                 expect(error).to.be.instanceof(Error);
                 expect(error.message).to.equal("Application name already exists");
@@ -471,10 +549,10 @@ describe("modules/dapp", function() {
 		});
 
 		it("Application link already exists", function(done) {
-            instance.unconfirmedLinks["https://alessio.rocks/app.zip"] = true;
+            instance.unconfirmedLinks[tx.asset.dapp.link] = true;
 
-			instance.applyUnconfirmed(trs, sender).then(function() {
-                done(new Error("Should rejects"));
+			instance.applyUnconfirmed(tx, sender).then(function() {
+                done(new Error("Should be rejected"));
             }).catch(function(error) {
                 expect(error).to.be.instanceof(Error);
                 expect(error.message).to.equal("Application link already exists");
@@ -483,81 +561,107 @@ describe("modules/dapp", function() {
 		});
 
 		it("success", function(done) {
-			instance.applyUnconfirmed(trs, sender).then(function() {
-                expect(instance.unconfirmedNames).to.have.property(trs.asset.dapp.name);
-                expect(instance.unconfirmedLinks).to.have.property(trs.asset.dapp.link);
+			instance.applyUnconfirmed(tx, sender).then(function() {
+                expect(instance.unconfirmedNames).to.have.property(tx.asset.dapp.name);
+                expect(instance.unconfirmedLinks).to.have.property(tx.asset.dapp.link);
                 done();
             }).catch(function(error) {
-                done(new Error("Should resolves"));
+                done(error);
             });
 		});
 	});
 
 	describe("undoUnconfirmed", function() {
-		var modules, expectedMerge;
+        var tx = { asset : { dapp : {} } };
 
-		it("calls diff.reverse and account.merge", function() {
-            trs.asset.dapp.name = "testName";
-            trs.asset.dapp.link = "testName";
+		it("check props", function(done) {
+            tx.asset.dapp.name = "testName";
+            tx.asset.dapp.link = "testName";
             instance.unconfirmedNames["testName"] = true;
             instance.unconfirmedLinks["testName"] = true;
 
-            instance.undoUnconfirmed(trs).then(function() {
+            instance.undoUnconfirmed(tx).then(function() {
                 expect(instance.unconfirmedNames["testName"]).to.be.undefined;
                 expect(instance.unconfirmedLinks["testName"]).to.be.undefined;
+                done();
+            }).catch(function(error) {
+                done(error);
             });
 		});
 	});
 
     describe("objectNormalize", function() {
+        var tx;
 
-        it("throws error", function(done) {
-            schema.validate.returns(false);
-            schema.getLastErrors.returns([new Error("error")]);
-
-            var throwError = function() {
-                instance.objectNormalize(trs);
+        beforeEach(function() {
+            tx = {
+                asset : {
+                    dapp : {
+                        name : "name",
+                        empty : undefined
+                    }
+                }
             };
 
-            expect(throwError).to.throw();
-
-            done();
+            library.schema.validate.returns(true);
         });
 
-		it("success", function(done) {
-			schema.validate.returns(true);
+        it("check removed empty props", function() {
+            var result = instance.objectNormalize(tx);
 
-			expect(instance.objectNormalize(trs)).to.deep.equal(trs);
-			expect(schema.validate.calledOnce).to.be.true;
-			expect(schema.validate.getCall(0).args.length).to.equal(2);
-			expect(schema.validate.getCall(0).args[0]).to.deep.equal(trs.asset.dapp);
-			expect(schema.validate.getCall(0).args[1]).to.equal(dappSchema);
+            expect(result).to.have.property("asset");
+            expect(result.asset).to.have.property("dapp");
+            expect(result.asset.dapp).to.not.have.property("empty");
+        });
 
-			done();
+        it("validation is called", function() {
+            instance.objectNormalize(tx);
+			expect(library.schema.validate.calledOnce).to.be.true;
+			expect(library.schema.validate.getCall(0).args.length).to.equal(2);
+			expect(library.schema.validate.getCall(0).args[0]).to.equal(tx.asset.dapp);
+			expect(library.schema.validate.getCall(0).args[1]).to.equal(dappSchema);
+        });
+
+        it("throws error", function() {
+            var errors = [new Error("error")];
+            library.schema.validate.returns(false);
+            library.schema.getLastErrors.returns(errors);
+
+            var throwError = function() {
+                instance.objectNormalize(tx);
+            };
+
+            expect(throwError).to.throw(`Failed to validate dapp schema: ${errors.map((err) => err.message).join(', ')}`);
+        });
+
+		it("success", function() {
+            var result = instance.objectNormalize(tx);
+			expect(result).to.equal(tx);
 		});
 	});
 
 	describe("dbRead", function() {
-		it("returns null when no keysgroup", function(done) {
-			var raw = {};
+        var raw;
 
-			var retVal = instance.dbRead(raw);
+        beforeEach(function() {
+            raw = {
+                dapp_name       : "some1",
+                dapp_description: "some2",
+                dapp_tags       : "some3",
+                dapp_type       : "some4",
+                dapp_link       : "some5",
+                dapp_category   : "some6",
+                dapp_icon       : "some7",
+            };
+        });
 
-			expect(retVal).to.equal(null);
-
-			done();
+        it("returns null if there is no name", function() {
+            delete raw.dapp_name;
+			var result = instance.dbRead(raw);
+			expect(result).to.equal(null);
 		});
 
-		it("success keysgroup array split", function(done) {
-			var raw = {
-				dapp_name: "carbonara",
-				dapp_description: 10,
-				dapp_tags: 10,
-				dapp_type: 10,
-				dapp_link: 10,
-				dapp_category: 10,
-				dapp_icon: 10
-			};
+		it("success keysgroup array split", function() {
 			var expectedResult = {
 				dapp: {
 					name: raw.dapp_name,
@@ -570,49 +674,39 @@ describe("modules/dapp", function() {
 				}
 			};
 
-			var retVal = instance.dbRead(raw);
-
-			expect(retVal).to.deep.equal(expectedResult);
-
-			done();
-		});
-	});
-
-	describe("dbTable", function() {
-		it("it's correct", function() {
-			expect(instance.dbTable).to.deep.equal("dapps");
-		});
-	});
-
-	describe("dbFields", function() {
-		it("it's correct", function() {
-			expect(instance.dbFields).to.deep.equal([
-				"type",
-				"name",
-				"description",
-				"tags",
-				"link",
-				"category",
-				"icon",
-				"transactionId"
-			]);
+			var result = instance.dbRead(raw);
+			expect(result).to.deep.equal(expectedResult);
 		});
 	});
 
 	describe("dbSave", function() {
 		it("returns correct query", function() {
-			expect(instance.dbSave(trs)).to.deep.equal({
+            var tx = {
+                asset : {
+                    dapp : {
+                        type : "type",
+                        name : "name",
+                        description : "description",
+                        tags : "tags",
+                        link : "link",
+                        icon : "icon",
+                        category : "category",
+                        id : "id"
+                    }
+                }
+            };
+			expect(instance.dbSave(tx)).to.deep.equal({
 				table: instance.dbTable,
 				fields: instance.dbFields,
 				values: {
-					type: trs.asset.dapp.type,
-					name: trs.asset.dapp.name,
-					description: trs.asset.dapp.description || null,
-					tags: trs.asset.dapp.tags || null,
-					link: trs.asset.dapp.link || null,
-					icon: trs.asset.dapp.icon || null,
-					category: trs.asset.dapp.category,
-					transactionId: trs.id
+					type: tx.asset.dapp.type,
+					name: tx.asset.dapp.name,
+					description: tx.asset.dapp.description || null,
+					tags: tx.asset.dapp.tags || null,
+					link: tx.asset.dapp.link || null,
+					icon: tx.asset.dapp.icon || null,
+					category: tx.asset.dapp.category,
+					transactionId: tx.id
 				}
 			});
 		});
@@ -620,56 +714,15 @@ describe("modules/dapp", function() {
 
 	describe("afterSave", function() {
 		it("sockets.emit called and called cb", function(done) {
-            instance.afterSave(trs).then(function() {
-                expect(network.io.sockets.emit.calledOnce).to.be.true;
-                expect(network.io.sockets.emit.firstCall.args.length).to.equal(2);
-                expect(network.io.sockets.emit.firstCall.args[0]).to.equal("dapps/change");
-                expect(network.io.sockets.emit.firstCall.args[1]).to.deep.equal({});
+            instance.afterSave({}).then(function() {
+                expect(library.network.io.sockets.emit.calledOnce).to.be.true;
+                expect(library.network.io.sockets.emit.firstCall.args.length).to.equal(2);
+                expect(library.network.io.sockets.emit.firstCall.args[0]).to.equal("dapps/change");
+                expect(library.network.io.sockets.emit.firstCall.args[1]).to.deep.equal({});
                 done();
-            }).catch(function(done) {
-                done(new Error("Should be resolved"));
+            }).catch(function(error) {
+                done(error);
             });
-		});
-	});
-
-	describe("ready", function() {
-		it("returns false with no signatures", function() {
-			trs.signatures = "not an array";
-			var retVal = instance.ready(trs, sender);
-
-			expect(retVal).to.equal(false);
-		});
-
-		it("returns false sender.multisignature not valid array", function() {
-			var sender = {
-				multisignatures: [1, 2, 3]
-			};
-			trs.signatures = [1, 2, 3];
-			var retVal = instance.ready(trs, sender);
-
-			expect(retVal).to.equal(false);
-		});
-
-		it("returns false when signatures >= multimin", function() {
-			var sender = {
-				multisignatures: [1],
-				multimin: 10
-			};
-			trs.signatures = [1, 2, 3];
-			var retVal = instance.ready(trs, sender);
-
-			expect(retVal).to.equal(false);
-		});
-
-		it("returns true when signatures >= multimin", function() {
-			var sender = {
-				multisignatures: [1],
-				multimin: 1
-			};
-			trs.signatures = [1, 2, 3];
-			var retVal = instance.ready(trs, sender);
-
-			expect(retVal).to.equal(true);
 		});
 	});
 });
