@@ -6,7 +6,7 @@ var path = require("path");
 var jsonSql = require("json-sql")();
 jsonSql.setDialect("postgresql");
 
-var rootDir = path.join(__dirname, "../../..");
+var rootDir = path.join(__dirname, "../../../src/");
 
 var constants = require(path.join(rootDir, "src/helpers/constants")).default;
 // var Account = rewire(path.join(rootDir, "logic/_account.js"));
@@ -353,64 +353,64 @@ describe("logic/account", function() {
             expect(account.model).to.deep.equal(model);
         });
 
-        it("fields", function() {
-            var fields = [
-                { field: "username" },
-                { field: "isDelegate" },
-                { field: "u_isDelegate" },
-                { field: "secondSignature" },
-                { field: "u_secondSignature" },
-                { field: "u_username" },
-                { expression: 'UPPER("address")', alias: "address" },
-                { expression: "ENCODE(\"publicKey\", 'hex')", alias: "publicKey" },
-                {
-                    expression: "ENCODE(\"secondPublicKey\", 'hex')",
-                    alias: "secondPublicKey"
-                },
-                { expression: '("balance")::bigint', alias: "balance" },
-                { expression: '("u_balance")::bigint', alias: "u_balance" },
-                { expression: '("vote")::bigint', alias: "vote" },
-                { expression: '("rate")::bigint', alias: "rate" },
-                {
-                    expression:
-                    '(SELECT ARRAY_AGG("dependentId") FROM mem_accounts2delegates WHERE "accountId" = a."address")',
-                    alias: "delegates"
-                },
-                {
-                    expression:
-                    '(SELECT ARRAY_AGG("dependentId") FROM mem_accounts2u_delegates WHERE "accountId" = a."address")',
-                    alias: "u_delegates"
-                },
-                {
-                    expression:
-                    '(SELECT ARRAY_AGG("dependentId") FROM mem_accounts2multisignatures WHERE "accountId" = a."address")',
-                    alias: "multisignatures"
-                },
-                {
-                    expression:
-                    '(SELECT ARRAY_AGG("dependentId") FROM mem_accounts2u_multisignatures WHERE "accountId" = a."address")',
-                    alias: "u_multisignatures"
-                },
-                { field: "multimin" },
-                { field: "u_multimin" },
-                { field: "multilifetime" },
-                { field: "u_multilifetime" },
-                { field: "blockId" },
-                { field: "nameexist" },
-                { field: "u_nameexist" },
-                { field: "producedblocks" },
-                { field: "missedblocks" },
-                { expression: '("fees")::bigint', alias: "fees" },
-                { expression: '("rewards")::bigint', alias: "rewards" },
-                { field: "virgin" }
-            ];
-            expect(account.fields).to.deep.equal(fields);
-        });
-
         it("binary", function() {
             var binary = ["publicKey", "secondPublicKey"];
             expect(account.binary).to.deep.equal(binary);
         });
+
+      it("fields", function() {
+        var fields = [
+          { field: "username" },
+          { field: "isDelegate" },
+          { field: "u_isDelegate" },
+          { field: "secondSignature" },
+          { field: "u_secondSignature" },
+          { field: "u_username" },
+          { expression: 'UPPER("address")', alias: "address" },
+          { expression: "ENCODE(\"publicKey\", 'hex')", alias: "publicKey" },
+          {
+            expression: "ENCODE(\"secondPublicKey\", 'hex')",
+            alias: "secondPublicKey"
+          },
+          { expression: '("balance")::bigint', alias: "balance" },
+          { expression: '("u_balance")::bigint', alias: "u_balance" },
+          { expression: '("vote")::bigint', alias: "vote" },
+          { expression: '("rate")::bigint', alias: "rate" },
+          {
+            expression:
+              '(SELECT ARRAY_AGG("dependentId") FROM mem_accounts2delegates WHERE "accountId" = a."address")',
+            alias: "delegates"
+          },
+          {
+            expression:
+              '(SELECT ARRAY_AGG("dependentId") FROM mem_accounts2u_delegates WHERE "accountId" = a."address")',
+            alias: "u_delegates"
+          },
+          {
+            expression:
+              '(SELECT ARRAY_AGG("dependentId") FROM mem_accounts2multisignatures WHERE "accountId" = a."address")',
+            alias: "multisignatures"
+          },
+          {
+            expression:
+              '(SELECT ARRAY_AGG("dependentId") FROM mem_accounts2u_multisignatures WHERE "accountId" = a."address")',
+            alias: "u_multisignatures"
+          },
+          { field: "multimin" },
+          { field: "u_multimin" },
+          { field: "multilifetime" },
+          { field: "u_multilifetime" },
+          { field: "blockId" },
+          { field: "nameexist" },
+          { field: "u_nameexist" },
+          { field: "producedblocks" },
+          { field: "missedblocks" },
+          { expression: '("fees")::bigint', alias: "fees" },
+          { expression: '("rewards")::bigint', alias: "rewards" },
+          { field: "virgin" }
+        ];
+        expect(account.fields).to.deep.equal(fields);
+      });
 
         it("filter", function() {
             var filter = {
