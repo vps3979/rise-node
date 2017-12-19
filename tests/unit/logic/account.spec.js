@@ -6,7 +6,7 @@ var path = require("path");
 var jsonSql = require("json-sql")();
 jsonSql.setDialect("postgresql");
 
-var rootDir = path.join(__dirname, "../../../src/");
+var rootDir = path.join(__dirname, "../../../");
 
 var constants = require(path.join(rootDir, "src/helpers/constants")).default;
 // var Account = rewire(path.join(rootDir, "logic/_account.js"));
