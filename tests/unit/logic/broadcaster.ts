@@ -538,4 +538,117 @@ describe("logic/broadcaster", () => {
             }]);
         });
     });
+
+    describe("releaseQueue", () => {
+        let queue;
+        let broadcasts;
+        let peers;
+        
+        let filterQueueStub;
+        let squashQueueStub;
+        let getPeersStub;
+        let broadcastStub;
+
+        beforeEach(() => {
+            queue = [{},{}];
+            broadcasts = [{
+                params : { name : "params1" },
+                options : "options1"
+            },{
+                params : { name : "params2" },
+                options : "options2"
+            }];
+            peers = [{ some : "some1" },{ some : "some2" }];
+
+            instance.queue = queue;
+
+            filterQueueStub = sandbox.stub(instance as any, "filterQueue");
+            squashQueueStub = sandbox.stub(instance as any, "squashQueue");
+            getPeersStub = sandbox.stub(instance as any, "getPeers");
+            broadcastStub = sandbox.stub(instance as any, "broadcast");
+
+            squashQueueStub.returns(broadcasts);
+            getPeersStub.returns(peers);
+            broadcastStub.resolves();
+        });
+
+        it("library logger debug is called first time", async () => {
+            await (instance as any).releaseQueue();
+
+            expect(library.logger.debug.callCount).to.be.at.least(1);
+            expect(library.logger.debug.firstCall.args.length).to.be.equal(1);
+            expect(library.logger.debug.firstCall.args[0]).to.be.equal("Releasing enqueued broadcasts");
+        });
+
+        it("if queue.length == 0 filterQueue is not called", async () => {
+            instance.queue = [];
+
+            const result = await (instance as any).releaseQueue();
+
+            expect(library.logger.debug.callCount).to.be.equal(2);
+            expect(library.logger.debug.secondCall.args.length).to.be.equal(1);
+            expect(library.logger.debug.secondCall.args[0]).to.be.equal("Queue empty");
+
+            expect(result).to.be.undefined;
+
+            expect(filterQueueStub.called).to.be.false;
+        });
+
+        it("filterQueue is called", async () => {
+            await (instance as any).releaseQueue();
+
+            expect(filterQueueStub.calledOnce).to.be.true;
+            expect(filterQueueStub.firstCall.args.length).to.be.equal(0);
+        });
+
+        it("squashQueue is called", async () => {
+            await (instance as any).releaseQueue();
+
+            expect(squashQueueStub.calledOnce).to.be.true;
+            expect(squashQueueStub.firstCall.args.length).to.be.equal(1);
+            expect(squashQueueStub.firstCall.args[0]).to.be.deep.equal([{},{}]);
+        });
+
+        it("getPeers is called", async () => {
+            await (instance as any).releaseQueue();
+
+            expect(getPeersStub.calledOnce).to.be.true;
+            expect(getPeersStub.firstCall.args.length).to.be.equal(1);
+            expect(getPeersStub.firstCall.args[0]).to.be.deep.equal({});
+        });
+
+        it("broadcast is called", async () => {
+            await (instance as any).releaseQueue();
+
+            expect(broadcastStub.callCount).to.be.equal(broadcasts.length);
+            broadcasts.forEach((broadcast, index) => {
+                expect(broadcastStub.getCall(index).args.length).to.be.equal(2);
+                expect(broadcastStub.getCall(index).args[0]).to.be.deep.equal({
+                    peers : peers,
+                    name : broadcast.params.name
+                });
+                expect(broadcastStub.getCall(index).args[1]).to.be.equal(broadcast.options);
+            });
+        });
+
+        it("fail; logger.debug is called", async () => {
+            const error = new Error("error");
+            broadcastStub.rejects(error);
+
+            await (instance as any).releaseQueue();
+
+            expect(library.logger.debug.calledTwice).to.be.true;
+            expect(library.logger.debug.secondCall.args.length).to.be.equal(2);
+            expect(library.logger.debug.secondCall.args[0]).to.be.equal("Failed to release broadcast queue");
+            expect(library.logger.debug.secondCall.args[1]).to.be.equal(error);
+        });
+
+        it("success; logger.debug is called", async () => {
+            await (instance as any).releaseQueue();
+
+            expect(library.logger.debug.calledTwice).to.be.true;
+            expect(library.logger.debug.secondCall.args.length).to.be.equal(1);
+            expect(library.logger.debug.secondCall.args[0]).to.be.equal(`Broadcasts released ${broadcasts.length}`);
+        });
+    });
 });
