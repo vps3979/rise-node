@@ -1,322 +1,245 @@
-var chai = require('chai');
-var assertArrays = require('chai-arrays');
+const chai = require('chai');
+const assertArrays = require('chai-arrays');
 chai.use(assertArrays);
-var expect = chai.expect;
-var sinon = require('sinon');
-var rewire = require('rewire');
-var Vote = rewire('../../../logic/vote');
-var zSchema = require('../../../helpers/z_schema').default;
-var constants = require('../../../helpers/constants').default;
-var crypto = require('crypto');
-var Diff = require('../../../helpers/diff');
+const expect = chai.expect;
+const sinon = require('sinon');
+const path = require("path");
+const crypto = require("crypto");
+const rootDir = path.join(__dirname, "../../../..");
+
+const VoteModule = require(path.join(rootDir, "src/logic/transactions/vote"));
+const Vote = VoteModule.VoteTransaction;
+const constants = require(path.join(rootDir, "src/helpers/constants")).default;
+const voteSchema = require(path.join(rootDir, "src/schema/logic/transactions/vote")).default;
+//var zSchema = require('../../../helpers/z_schema').default;
+//var constants = require('../../../helpers/constants').default;
+//var Diff = require('../../../helpers/diff');
 
 describe('logic/vote', function () {
-	var callback,
-		clock,
-		delegates = {},
-		rounds = {},
-		system = {};
+    const sandbox = sinon.sandbox.create({
+        injectInto: null,
+        properties: ["spy", "stub", "clock"],
+        useFakeTimers: true,
+        useFakeServer: false
+    });
 
-	beforeEach(function () {
-		callback = sinon.spy();
-		clock = sinon.useFakeTimers();
-		Vote.__set__('setImmediate', setImmediate);
+    let instance;
+    let library;
+    let modules;
+
+	beforeEach(() => {
+        library = {
+            logger : {},
+            schema : {
+                validate : sandbox.stub(),
+                getLastErrors : sandbox.stub()
+            },
+            account : {
+                merge : sandbox.stub()
+            }
+        };
+        modules = {
+            delegates : {
+                checkUnconfirmedDelegates : sandbox.stub(),
+                checkConfirmedDelegates : sandbox.stub()
+            },
+            rounds : {
+                calcRound : sandbox.stub()
+            },
+            system : {
+                getFees : sandbox.stub()
+            }
+        };
+
+        instance = new Vote(library);
+        instance.bind(modules.delegates, modules.rounds, modules.system);
 	});
 
-	afterEach(function () {
-		clock.restore();
-		callback.reset();
-	});
+    afterEach(() => {
+        sandbox.reset();
+    });
 
-	it('should be a function', function () {
-		expect(Vote).to.be.a('function');
-	});
+    after(() => {
+        sandbox.restore();
+    });
 
-	it('when Vote is instantiated', function () {
-		var logger = 1,
-			schema = 2,
-			library;
-		new Vote(logger, schema);
-		library = Vote.__get__('library');
-		expect(library.logger).to.equals(logger);
-		expect(library.schema).to.equals(schema);
-	});
+    describe("constructor", () => {
+        it('should be a function', () => {
+            expect(Vote).to.be.a('function');
+        });
 
-	it('bind()', function () {
-		delegates = 'a';
-		rounds = 'b';
-		system = 'c';
-		var modules, vote;
-		vote = new Vote();
-		vote.bind(delegates, rounds, system);
-		modules = Vote.__get__('modules');
-		expect(modules.delegates).to.equals(delegates);
-		expect(modules.rounds).to.equals(rounds);
-		expect(modules.system).to.equals(system);
-	});
+        it("should be instance of Vote", () => {
+            expect(instance).to.be.instanceof(Vote);
+        });
 
-	it('create()', function () {
-		var data = { sender: { address: 10 }, votes: 20 },
-			trs = { recipientId: 0, asset: { votes: 0 } },
-			vote;
-		vote = new Vote();
-		var transaction = vote.create(data, trs);
-		expect(transaction.recipientId).to.equals(data.sender.address);
-		expect(transaction.asset.votes).to.equals(data.votes);
-	});
+        it("library should have props", () => {
+            expect(instance.library).to.have.property("logger");
+            expect(instance.library).to.have.property("schema");
+            expect(instance.library).to.have.property("account");
 
-	it('calculateFee()', function () {
-		var height = 50,
-			system = {
-				getFees: function (height) {
-					return { fees: { vote: 100 } };
-				}
-			},
-			vote;
-		vote = new Vote();
-		vote.bind(undefined, undefined, system);
-		var fee = vote.calculateFee(undefined, undefined, height);
-		expect(fee).to.equals(100);
-	});
+            expect(instance.library.logger).to.be.equal(library.logger);
+            expect(instance.library.schema).to.be.equal(library.schema);
+            expect(instance.library.account).to.be.equal(library.account);
+        });
 
-	describe('verify()', function () {
-		var trs, sender, vote;
+        it("modules should have props", () => {
+            expect(instance.modules).to.have.property("delegates");
+            expect(instance.modules).to.have.property("rounds");
+            expect(instance.modules).to.have.property("system");
 
-		beforeEach(function () {
-			vote = new Vote();
+            expect(instance.modules.delegates).to.be.equal(modules.delegates);
+            expect(instance.modules.rounds).to.be.equal(modules.rounds);
+            expect(instance.modules.system).to.be.equal(modules.system);
+        });
+    });
+
+    describe("calculateFee()", () => {
+        let tx;
+        let sender;
+        let height;
+        let data;
+
+        beforeEach(() => {
+            height = 200;
+            data = { fees: { vote: 100 } };
+
+            modules.system.getFees.returns(data);
+        });
+
+        it("getFees is called", () => {
+            instance.calculateFee(tx, sender, height);
+
+            expect(modules.system.getFees.calledOnce).to.be.true;
+            expect(modules.system.getFees.firstCall.args.length).to.be.equal(1);
+            expect(modules.system.getFees.firstCall.args[0]).to.be.equal(height);
+        });
+
+        it("check result", () => {
+            const result = instance.calculateFee(tx, sender, height);
+            expect(result).to.be.equal(data.fees.vote);
+        });
+    });
+
+	describe('verify()', () => {
+        let tx;
+        let sender;
+        let result;
+
+		beforeEach(() => {
+            tx = {
+                recipientId : 13,
+                senderId : 13,
+                asset : {
+                    votes : [1,2]
+                }
+            };
+            result = {};
+
+            sandbox.stub(instance, "assertValidVote");
+            sandbox.stub(instance, "checkConfirmedDelegates");
+
+            instance.checkConfirmedDelegates.returns(result);
 		});
 
-		it('If recipientId is not equal to senderId', function () {
-			trs = { recipientId: 1, senderId: 2 };
-			vote.verify(trs, sender, callback);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid recipient');
+		it('If recipientId is not equal to senderId', async () => {
+            tx.senderId = 12;
+            try {
+                await instance.verify(tx, sender);
+                throw new Error("Should be rejected");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal("Missing recipient");
+            }
 		});
 
-		it('if trs.asset is not true', function () {
-			trs = { asset: {} };
-			vote.verify(trs, sender, callback);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid transaction asset');
+		it('if trs.asset is not true', async () => {
+            delete tx.asset;
+            try {
+                await instance.verify(tx, sender);
+                throw new Error("Should be rejected");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal("Invalid transaction asset");
+            }
 		});
 
-		it('if trs.asset.votes is not true', function () {
-			trs = { asset: { votes: undefined } };
-			vote.verify(trs, sender, callback);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid transaction asset');
+		it('if trs.asset.votes is not true', async () => {
+            delete tx.asset.votes;
+            try {
+                await instance.verify(tx, sender);
+                throw new Error("Should be rejected");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal("Invalid transaction asset");
+            }
 		});
 
-		it('If trs.asset.votes is not an Array', function () {
-			trs = { asset: { votes: 'foo' } };
-			vote.verify(trs, sender, callback);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid votes. Must be an array');
+		it('If trs.asset.votes is not an Array', async () => {
+            tx.asset.votes = true;
+            try {
+                await instance.verify(tx, sender);
+                throw new Error("Should be rejected");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal("Invalid votes. Must be an array");
+            }
 		});
 
-		it('if trs.asset.votes.length is not true', function () {
-			trs = { asset: { votes: [] } };
-			vote.verify(trs, sender, callback);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid votes. Must not be empty');
+		it('if trs.asset.votes.length is not true', async () => {
+            tx.asset.votes = [];
+            try {
+                await instance.verify(tx, sender);
+                throw new Error("Should be rejected");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal("Invalid votes. Must not be empty");
+            }
 		});
 
-		it('if trs.asset.votes.length is not true', function () {
-			trs = { asset: { votes: [] } };
-			vote.verify(trs, sender, callback);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid votes. Must not be empty');
+		it('if trs.asset.votes is greater than maxVotesPerTransaction', async () => {
+            tx.asset.votes = Array(constants.maxVotesPerTransaction + 1);
+            try {
+                await instance.verify(tx, sender);
+                throw new Error("Should be rejected");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal(`Voting limit exceeded. Maximum is ${constants.maxVotesPerTransaction} votes per transaction`);
+            }
 		});
 
-		it('if trs.asset.votes is greater than maxVotesPerTransaction', function () {
-			trs = { asset: { votes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] } };
-			vote.verify(trs, sender, callback);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.include('Voting limit exceeded');
+		it('if there are duplicate votes', async () => {
+            tx.asset.votes = [1,1];
+            try {
+                await instance.verify(tx, sender);
+                throw new Error("Should be rejected");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal("Multiple votes for same delegate are not allowed");
+            }
 		});
 
-		it('if vote has not a valid format', function () {
-			trs = { asset: { votes: [123] } };
-			vote.verify(trs, sender, callback);
-			clock.runAll();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.include('Invalid vote at index');
-		});
+		it('checkConfirmedDelegates is called', async () => {
+            await instance.verify(tx, sender);
 
-		it('if there are duplicate votes', function () {
-			trs = {
-				asset: {
-					votes: [
-						'+b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9',
-						'+b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'
-					]
-				}
-			};
-			vote.verify(trs, sender, callback);
-			clock.runAll();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.include(
-				'Multiple votes for same delegate are not allowed'
-			);
-		});
+            expect(instance.checkConfirmedDelegates.calledOnce).to.be.true;
+            expect(instance.checkConfirmedDelegates.firstCall.args.length).to.be.equal(1);
+            expect(instance.checkConfirmedDelegates.firstCall.args[0]).to.be.equal(tx);
+        });
 
-		it('success', function () {
-			Vote.__set__('self.checkConfirmedDelegates', function (trs, cb) {
-				return setImmediate(cb);
-			});
-			trs = {
-				asset: {
-					votes: [
-						'+b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9',
-						'+37b6d3fc89fb418fa5e3799e760cc2b1733a567daebb08a531d3d7e8b24f2d22'
-					]
-				}
-			};
-			vote.verify(trs, sender, callback);
-			clock.runAll();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals(undefined);
-		});
-	});
+        it("check result", async () => {
+            const testedResult = await instance.verify(tx, sender);
 
-	describe('verifyVote()', function () {
-		var vote;
-
-		beforeEach(function () {
-			vote = new Vote();
-		});
-
-		it('if vote is not a string', function () {
-			vote.verifyVote(123, callback);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid vote type');
-		});
-
-		it('if vote has not a valid format', function () {
-			vote.verifyVote(
-				'+b94d27b993-d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9',
-				callback
-			);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid vote format');
-		});
-
-		it('if vote length is not 65', function () {
-			vote.verifyVote(
-				'+b94d27b993d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9zz',
-				callback
-			);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals('Invalid vote length');
-		});
-
-		it('success', function () {
-			vote.verifyVote(
-				'+b94d27b993d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9z',
-				callback
-			);
-			clock.tick();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals(undefined);
-		});
-	});
-
-	describe('checkConfirmedDelegates()', function () {
-		var trs, vote;
-
-		it('should call to callback without errors', function () {
-			trs = { senderPublicKey: 'foo', asset: { votes: [] } };
-			vote = new Vote();
-			vote.bind(delegates, rounds, system);
-			Vote.__set__({
-				modules: {
-					delegates: {
-						checkConfirmedDelegates: function (trs, votes, cb) {
-							return setImmediate(cb);
-						}
-					}
-				}
-			});
-			vote.checkConfirmedDelegates(trs, callback);
-			clock.runAll();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals(undefined);
-		});
-	});
-
-	describe('checkUnconfirmedDelegates()', function () {
-		var trs, vote, delegatesStub;
-
-		afterEach(function () {
-			delegatesStub.restore();
-		});
-
-		it('should call to callback without errors', function () {
-			trs = { senderPublicKey: 'foo', asset: { votes: [] } };
-			delegates = { checkUnconfirmedDelegates: function () {} };
-			delegatesStub = sinon
-				.stub(delegates, 'checkUnconfirmedDelegates')
-				.callsFake(function (trs, votes, cb) {
-					return setImmediate(cb);
-				});
-			vote = new Vote();
-			vote.bind(delegates, rounds, system);
-			vote.checkUnconfirmedDelegates(trs, callback);
-			clock.runAll();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][0]).to.equals(undefined);
-			expect(delegatesStub.calledOnce).to.be.true;
-			expect(delegatesStub.args[0][0]).to.equal(trs.senderPublicKey);
-			expect(delegatesStub.args[0][1]).to.equal(trs.asset.votes);
-		});
-	});
-
-	describe('process()', function () {
-		var trs, vote;
-
-		it('should call to callback passing the same transaction parameter received', function () {
-			trs = 1;
-			vote = new Vote();
-			vote.process(trs, null, callback);
-			clock.runAll();
-			expect(callback.calledOnce).to.be.true;
-			expect(callback.args[0][1]).to.equals(trs);
-		});
-	});
+            expect(testedResult).to.be.equal(result);
+        });
+    });
 
 	describe('getBytes()', function () {
-		var trs, result, getBytes, vote;
+        let tx;
+        let skipSignature;
+        let skipSecondSignature;
 
 		beforeEach(function () {
-			vote = new Vote();
-		});
-
-		it('if the input data is wrong', function () {
-			trs = { asset: { votes: 123 } };
-			getBytes = function () {
-				vote.getBytes(trs);
-			};
-			expect(getBytes).to.throw();
-		});
-
-		it('if trs.asset.votes is undefined', function () {
-			trs = { asset: { votes: undefined } };
-			result = vote.getBytes(trs);
-			expect(result).to.equals(null);
-		});
-
-		it('success', function () {
-			trs = {
+			tx = {
 				asset: {
 					votes: [
 						'+37b6d3fc89fb418fa5e3799e760cc2b1733a567daebb08a531d3d7e8b24f2d22',
@@ -324,517 +247,440 @@ describe('logic/vote', function () {
 					]
 				}
 			};
-			result = vote.getBytes(trs);
-			expect(result).to.be.an.instanceof(Buffer);
+		});
+
+		it('if tx.asset.votes is undefined', function () {
+            delete tx.asset.votes;
+            
+			const result = instance.getBytes(tx);
+
+			expect(result).to.equals(null);
+		});
+
+		it('success', function () {
+			const result = instance.getBytes(tx);
+
+            expect(result).to.be.instanceof(Buffer);
+            expect(result).to.be.deep.equal(Buffer.from(tx.asset.votes.join(''), 'utf8'));
 		});
 	});
 
-	describe('apply()', function () {
-		var trs,
-			block,
-			sender,
-			vote,
-			mergeStub,
-			checkConfirmedDelegatesStub,
-			calcSpy;
+    describe('apply()', () => {
+        let tx;
+        let block;
+        let sender;
 
-		beforeEach(function () {
-			vote = new Vote();
-      vote.scope = {
-        account: {
-          merge: function(){}
-        }
-      };
-      mergeStub = sinon
-        .stub(vote.scope.account, 'merge')
-        .callsFake(function (address, block, cb) {
-          setImmediate(cb);
+        let round;
+        let result;
+
+        beforeEach(function () {
+            tx = {
+                asset : {
+                    votes : [1,2]
+                }
+            };
+            block = {
+                id : "id",
+                height : 200
+            };
+            sender = {
+                address : "address"
+            };
+
+            modules.rounds.calcRound.returns(round);
+            library.account.merge.returns(result);
+            sandbox.stub(instance, "checkConfirmedDelegates");
         });
-			checkConfirmedDelegatesStub = sinon
-				.stub(vote, 'checkConfirmedDelegates')
-				.callsFake(function (trs, seriesCb) {
-					return setImmediate(seriesCb);
-				});
+
+        it("checkConfirmedDelegates is called", async () => {
+            await instance.apply(tx, block, sender);
+
+            expect(instance.checkConfirmedDelegates.calledOnce).to.be.true;
+            expect(instance.checkConfirmedDelegates.firstCall.args.length).to.be.equal(1);
+            expect(instance.checkConfirmedDelegates.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("checkConfirmedDelegates throws error", async () => {
+            const error = new Error("Error");
+            instance.checkConfirmedDelegates.rejects(error);
+
+            try {
+                await instance.apply(tx, block, sender);
+                throw new Error("Should be rejected");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e).to.be.equal(error);
+            }
+        });
+
+        it("modules.rounds.calcRound is called", async () => {
+            await instance.apply(tx, block, sender);
+
+            expect(modules.rounds.calcRound.calledOnce).to.be.true;
+            expect(modules.rounds.calcRound.firstCall.args.length).to.be.equal(1);
+            expect(modules.rounds.calcRound.firstCall.args[0]).to.be.equal(block.height);
+        });
+
+        it("library.account.merge is called", async () => {
+            await instance.apply(tx, block, sender);
+
+            expect(library.account.merge.calledOnce).to.be.true;
+            expect(library.account.merge.firstCall.args.length).to.be.equal(3);
+            expect(library.account.merge.firstCall.args[0]).to.be.equal(sender.address);
+            expect(library.account.merge.firstCall.args[1]).to.be.deep.equal({
+                blockId  : block.id,
+                delegates: tx.asset.votes,
+                round    : round,
+            });
+            expect(library.account.merge.firstCall.args[2]).to.be.a("function");
+        });
+    });
+
+    describe('undo()', () => {
+        let tx;
+        let block;
+        let sender;
+
+        let round;
+        let result;
+
+        beforeEach(function () {
+            tx = {
+                asset : {
+                    votes : ["+123","+234"]
+                }
+            };
+            block = {
+                id : "id",
+                height : 200
+            };
+            sender = {
+                address : "address"
+            };
+
+            modules.rounds.calcRound.returns(round);
+            library.account.merge.returns(result);
+            sandbox.stub(instance, "objectNormalize");
+        });
+
+        it("objectNormalize is called", async () => {
+            await instance.undo(tx, block, sender);
+
+            expect(instance.objectNormalize.calledOnce).to.be.true;
+            expect(instance.objectNormalize.firstCall.args.length).to.be.equal(1);
+            expect(instance.objectNormalize.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("modules.rounds.calcRound is called", async () => {
+            await instance.undo(tx, block, sender);
+
+            expect(modules.rounds.calcRound.calledOnce).to.be.true;
+            expect(modules.rounds.calcRound.firstCall.args.length).to.be.equal(1);
+            expect(modules.rounds.calcRound.firstCall.args[0]).to.be.equal(block.height);
+        });
+
+        it("library.account.merge is called", async () => {
+            await instance.undo(tx, block, sender);
+
+            expect(library.account.merge.calledOnce).to.be.true;
+            expect(library.account.merge.firstCall.args.length).to.be.equal(3);
+            expect(library.account.merge.firstCall.args[0]).to.be.equal(sender.address);
+            expect(library.account.merge.firstCall.args[1]).to.be.deep.equal({
+                blockId  : block.id,
+                delegates: ["-123","-234"],
+                round    : round,
+            });
+            expect(library.account.merge.firstCall.args[2]).to.be.a("function");
+        });
+    });
+
+	describe('checkUnconfirmedDelegates()', () => {
+        let tx;
+        let result;
+
+        beforeEach(() => {
+            tx = {
+                senderPublicKey : "publicKey",
+                asset : {
+                    votes : []
+                }
+            };
+            result = {};
+
+            modules.delegates.checkUnconfirmedDelegates.resolves(result);
+        });
+
+		it("should call modules.delegates.checkUnconfirmedDelegates", async () => {
+            await instance.checkUnconfirmedDelegates(tx);
+
+            expect(modules.delegates.checkUnconfirmedDelegates.calledOnce).to.be.true;
+            expect(modules.delegates.checkUnconfirmedDelegates.firstCall.args.length).to.be.equal(2);
+            expect(modules.delegates.checkUnconfirmedDelegates.firstCall.args[0]).to.be.equal(tx.senderPublicKey);
+            expect(modules.delegates.checkUnconfirmedDelegates.firstCall.args[1]).to.be.equal(tx.asset.votes);
 		});
 
-		afterEach(function () {
-			checkConfirmedDelegatesStub.restore();
-			calcSpy.restore();
-      mergeStub.restore();
-		});
+        it("check result", async () => {
+            const testedResult = await instance.checkUnconfirmedDelegates(tx);
 
-		it('should call to callback', function () {
-			rounds = {
-				calc: function (height) {
-					return height;
-				}
-			};
-			calcSpy = sinon.spy(rounds, 'calc');
-			trs = { asset: { votes: [] } };
-			block = { id: 123, height: 123 };
-			sender = { address: 123 };
-			vote.bind(delegates, rounds, system);
-			vote.apply(trs, block, sender, callback);
-			clock.runAll();
-			expect(checkConfirmedDelegatesStub.calledOnce).to.be.true;
-			expect(checkConfirmedDelegatesStub.args[0][0]).to.deep.equal(trs);
-			expect(vote.scope.account.merge.calledOnce).to.be.true;
-			expect(vote.scope.account.merge.args[0][0]).to.equal(sender.address);
-			expect(calcSpy.calledOnce).to.be.true;
-			expect(callback.calledOnce).to.be.true;
-		});
+            expect(testedResult).to.be.equal(result);
+        });
 	});
 
-	describe('undo()', function () {
-		var trs, block, sender, schema, logger, vote, calcSpy, mergeStub, DiffStub;
+	describe('checkConfirmedDelegates()', () => {
+        let tx;
+        let result;
 
-		beforeEach(function () {
-			schema = new zSchema();
-			vote = new Vote(logger, schema);
-			vote.scope = {
-				account: {
-					merge: function(){}
-				}
-			};
-			mergeStub = sinon
-				.stub(vote.scope.account, 'merge')
-				.callsFake(function (address, block, cb) {
-					setImmediate(cb);
-				});
-			rounds = {
-				calc: function (height) {
-					return height;
-				}
-			};
-			calcSpy = sinon.spy(rounds, 'calc');
-			sender = { address: 123 };
-			block = { id: 123, height: 123 };
-			vote.bind(delegates, rounds, system);
-			DiffStub = sinon.stub(Diff, 'reverse');
+        beforeEach(() => {
+            tx = {
+                senderPublicKey : "publicKey",
+                asset : {
+                    votes : []
+                }
+            };
+            result = {};
+
+            modules.delegates.checkConfirmedDelegates.resolves(result);
+        });
+
+		it("should call modules.delegates.checkConfirmedDelegates", async () => {
+            await instance.checkConfirmedDelegates(tx);
+
+            expect(modules.delegates.checkConfirmedDelegates.calledOnce).to.be.true;
+            expect(modules.delegates.checkConfirmedDelegates.firstCall.args.length).to.be.equal(2);
+            expect(modules.delegates.checkConfirmedDelegates.firstCall.args[0]).to.be.equal(tx.senderPublicKey);
+            expect(modules.delegates.checkConfirmedDelegates.firstCall.args[1]).to.be.equal(tx.asset.votes);
 		});
 
-		afterEach(function () {
-			calcSpy.reset();
-			mergeStub.restore();
-			DiffStub.restore();
-		});
+        it("check result", async () => {
+            const testedResult = await instance.checkConfirmedDelegates(tx);
 
-		it('if trs.asset.votes is null', function () {
-			trs = { asset: { votes: null } };
-			vote.undo(trs, block, sender, callback);
-			clock.runAll();
-			expect(mergeStub.calledOnce).to.be.false;
-			expect(calcSpy.calledOnce).to.be.false;
-			expect(callback.calledOnce).to.be.true;
-			expect(DiffStub.called).to.be.false;
-		});
-
-		it('if trs.asset.votes is empty', function () {
-			trs = { asset: { votes: [] } };
-			vote.undo(trs, block, sender, callback);
-			clock.runAll();
-			expect(mergeStub.calledOnce).to.be.false;
-			expect(callback.calledOnce).to.be.true;
-			expect(DiffStub.called).to.be.false;
-		});
-
-		it('if trs.asset.votes is undefined', function () {
-			trs = { asset: { votes: undefined } };
-			vote.undo(trs, block, sender, callback);
-			clock.runAll();
-			expect(mergeStub.calledOnce).to.be.false;
-			expect(callback.calledOnce).to.be.true;
-			expect(DiffStub.called).to.be.false;
-		});
-
-		it('if trs.asset.votes has not a valid format', function () {
-			trs = { asset: { votes: [1, 2] } };
-			vote.undo(trs, block, sender, callback);
-			clock.runAll();
-			expect(mergeStub.calledOnce).to.be.false;
-			expect(callback.calledOnce).to.be.true;
-			expect(DiffStub.called).to.be.false;
-		});
-
-		it('if trs.asset.votes is an Array and have items', function () {
-			trs = {
-				asset: {
-					votes: [
-						'+37b6d3fc89fb418fa5e3799e760cc2b1733a567daebb08a531d3d7e8b24f2d22',
-						'+b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'
-					]
-				}
-			};
-			vote.undo(trs, block, sender, callback);
-			clock.runAll();
-			expect(mergeStub.calledOnce).to.be.true;
-			expect(callback.calledOnce).to.be.true;
-			expect(DiffStub.called).to.be.true;
-		});
+            expect(testedResult).to.be.equal(result);
+        });
 	});
 
-	describe('applyUnconfirmed', function () {
-		var trs, sender, scope, vote, checkUnconfirmedDelegatesStub, mergeStub;
+    describe("applyUnconfirmed()", () => {
+        let tx;
+        let sender;
+        let result;
 
-		beforeEach(function () {
-			vote = new Vote();
-      vote.scope = {
-        account: {
-          merge: function(){}
-        }
-      }
-			checkUnconfirmedDelegatesStub = sinon
-				.stub(vote, 'checkUnconfirmedDelegates')
-				.callsFake(function (trs, cb) {
-					return setImmediate(cb);
-				});
-			mergeStub = sinon
-				.stub(vote.scope.account, 'merge')
-				.callsFake(function (address, block, cb) {
-					setImmediate(cb);
-				});
-		});
+        beforeEach(() => {
+            tx = {
+                asset : {
+                    votes : []
+                }
+            };
+            sender = {
+                address : "address"
+            };
+            result = {};
 
-		afterEach(function () {
-			checkUnconfirmedDelegatesStub.restore();
-			mergeStub.restore();
-		});
+            sandbox.stub(instance, "checkUnconfirmedDelegates");
 
-		it('should call to callback', function () {
-			sender = { address: 123 };
-			scope = {
-				account: {
-					merge: function (address, data, cb) {
-						cb();
-					}
-				}
-			};
-			trs = { asset: { votes: [] } };
-			vote.applyUnconfirmed(trs, sender, callback);
-			clock.runAll();
-			expect(callback.calledOnce).to.be.true;
-			expect(checkUnconfirmedDelegatesStub.calledOnce).to.be.true;
-			expect(checkUnconfirmedDelegatesStub.args[0][0]).to.deep.equal(trs);
-			expect(mergeStub.calledOnce).to.be.true;
-			expect(mergeStub.args[0][0]).to.equal(sender.address);
-		});
+            instance.checkUnconfirmedDelegates.resolves();
+            library.account.merge.resolves(result);
+        });
+
+        it("checkUnconfirmedDelegates is called", async () => {
+            await instance.applyUnconfirmed(tx, sender);
+
+            expect(instance.checkUnconfirmedDelegates.calledOnce).to.be.true;
+            expect(instance.checkUnconfirmedDelegates.firstCall.args.length).to.be.equal(1);
+            expect(instance.checkUnconfirmedDelegates.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("library.account.merge is called", async () => {
+            await instance.applyUnconfirmed(tx, sender);
+
+            expect(library.account.merge.calledOnce).to.be.true;
+            expect(library.account.merge.firstCall.args.length).to.be.equal(3);
+            expect(library.account.merge.firstCall.args[0]).to.be.equal(sender.address);
+            expect(library.account.merge.firstCall.args[1]).to.be.deep.equal({ u_delegates: tx.asset.votes });
+            expect(library.account.merge.firstCall.args[2]).to.be.a("function");
+        });
+
+        it("check result", async () => {
+            const checkedResult = await instance.applyUnconfirmed(tx, sender);
+
+            expect(result).to.be.equal(checkedResult);
+        });
+    });
+
+    describe("undoUnconfirmed()", () => {
+        let tx;
+        let sender;
+        let result;
+
+        beforeEach(() => {
+            tx = {
+                asset : {
+                    votes : ["-123", "-234"]
+                }
+            };
+            sender = {
+                address : "address"
+            };
+            result = {};
+
+            sandbox.stub(instance, "objectNormalize");
+
+            library.account.merge.resolves(result);
+        });
+
+        it("objectNormalize is called", async () => {
+            await instance.undoUnconfirmed(tx, sender);
+
+            expect(instance.objectNormalize.calledOnce).to.be.true;
+            expect(instance.objectNormalize.firstCall.args.length).to.be.equal(1);
+            expect(instance.objectNormalize.firstCall.args[0]).to.be.equal(tx);
+        });
+
+        it("library.account.merge is called", async () => {
+            await instance.undoUnconfirmed(tx, sender);
+
+            expect(library.account.merge.calledOnce).to.be.true;
+            expect(library.account.merge.firstCall.args.length).to.be.equal(3);
+            expect(library.account.merge.firstCall.args[0]).to.be.equal(sender.address);
+            expect(library.account.merge.firstCall.args[1]).to.be.deep.equal({ u_delegates: ["+123","+234"] });
+            expect(library.account.merge.firstCall.args[2]).to.be.a("function");
+        });
+
+        it("check result", async () => {
+            const checkedResult = await instance.undoUnconfirmed(tx, sender);
+
+            expect(result).to.be.equal(checkedResult);
+        });
+    });
+
+	describe('objectNormalize()', () => {
+        let tx;
+
+        beforeEach(() => {
+            tx = {
+                asset : {}
+            };
+            library.schema.validate.returns(true);
+        });
+
+        it("library.schema.validate is called", () => {
+            instance.objectNormalize(tx);
+
+            expect(library.schema.validate.calledOnce).to.be.true;
+            expect(library.schema.validate.firstCall.args.length).to.be.equal(2);
+            expect(library.schema.validate.firstCall.args[0]).to.be.equal(tx.asset);
+            expect(library.schema.validate.firstCall.args[1]).to.be.equal(voteSchema);
+        });
+
+        it("validation error", () => {
+            const errors = [new Error('first'), new Error('second')];
+            library.schema.validate.returns(false);
+            library.schema.getLastErrors.returns(errors);
+            try {
+                instance.objectNormalize(tx);
+                throw new Error("Error should be thrown");
+            } catch(e) {
+                expect(e).to.be.instanceof(Error);
+                expect(e.message).to.be.equal("Failed to validate vote schema: first, second");
+            }
+        });
+
+        it("check result", () => {
+            const resultToTest = instance.objectNormalize(tx);
+
+            expect(resultToTest).to.be.equal(tx);
+        });
 	});
 
-	describe('undoUnconfirmed()', function () {
-		var trs, sender, schema, logger, vote, mergeStub, calcSpy, DiffStub;
+    describe("dbRead()", () => {
+        it("v_votes is not set", () => {
+            const result = instance.dbRead({});
 
-		beforeEach(function () {
-			schema = new zSchema();
-			vote = new Vote(logger, schema);
-      vote.scope = {
-        account: {
-          merge: function(){}
-        }
-      };
-			mergeStub = sinon
-				.stub(vote.scope.account, 'merge')
-				.callsFake(function (address, block, cb) {
-					setImmediate(cb);
-				});
-			rounds = {
-				calc: function (height) {
-					return height;
-				}
-			};
-			calcSpy = sinon.spy(rounds, 'calc');
-			sender = { address: 123 };
-			DiffStub = sinon.stub(Diff, 'reverse');
-			vote.bind(delegates, rounds, system);
-		});
+            expect(result).to.be.equal(null);
+        });
 
-		afterEach(function () {
-			mergeStub.restore();
-			calcSpy.reset();
-			DiffStub.restore();
-		});
+        it("v_votes is a string", () => {
+            const result = instance.dbRead({ v_votes : "first,second" });
 
-		it('if trs.asset.votes is null', function () {
-			trs = { asset: { votes: null } };
-			vote.undoUnconfirmed(trs, sender, callback);
-			clock.runAll();
-			expect(Diff.reverse.called).to.be.false;
-			expect(mergeStub.calledOnce).to.be.false;
-			expect(callback.calledOnce).to.be.true;
-		});
+            expect(result).to.be.deep.equal({
+                votes : ["first","second"]
+            });
+        });
+    });
 
-		it('if trs.asset.votes is empty', function () {
-			trs = { asset: { votes: [] } };
-			vote.undoUnconfirmed(trs, sender, callback);
-			clock.runAll();
-			expect(Diff.reverse.called).to.be.false;
-			expect(mergeStub.calledOnce).to.be.false;
-			expect(callback.calledOnce).to.be.true;
-		});
+    describe("dbSave()", () => {
+        let tx;
+        beforeEach(() => {
+            tx = {
+                id : "id",
+                asset : {
+                    votes : ["+123","-234"]
+                }
+            };
+        });
 
-		it('if trs.asset.votes is undefined', function () {
-			trs = { asset: { votes: undefined } };
-			vote.undoUnconfirmed(trs, sender, callback);
-			clock.runAll();
-			expect(Diff.reverse.called).to.be.false;
-			expect(mergeStub.calledOnce).to.be.false;
-			expect(callback.calledOnce).to.be.true;
-		});
+        it("if votes is array", () => {
+            const result = instance.dbSave(tx);
 
-		it('if trs.asset.votes has not a valid format', function () {
-			trs = { asset: { votes: [1, 2] } };
-			vote.undoUnconfirmed(trs, sender, callback);
-			clock.runAll();
-			expect(Diff.reverse.called).to.be.false;
-			expect(mergeStub.calledOnce).to.be.false;
-			expect(callback.calledOnce).to.be.true;
-		});
+            expect(result).to.be.deep.equal({
+                fields: instance.dbFields,
+                table : instance.dbTable,
+                values: {
+                    transactionId: tx.id,
+                    votes        : "+123,-234",
+                },
+            });
+        });
 
-		it('if trs.asset.votes is an Array and have items', function () {
-			trs = {
-				asset: {
-					votes: [
-						'+37b6d3fc89fb418fa5e3799e760cc2b1733a567daebb08a531d3d7e8b24f2d22',
-						'+b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'
-					]
-				}
-			};
-			vote.undoUnconfirmed(trs, sender, callback);
-			clock.runAll();
-			expect(Diff.reverse.called).to.be.true;
-			expect(mergeStub.calledOnce).to.be.true;
-			expect(mergeStub.args[0][0]).to.equal(sender.address);
-			expect(callback.calledOnce).to.be.true;
-		});
-	});
+        it("if votes is not an array", () => {
+            delete tx.asset.votes;
 
-	describe('objectNormalize()', function () {
-		var trs, vote, logger, schema, execMethod;
+            const result = instance.dbSave(tx);
 
-		beforeEach(function () {
-			schema = new zSchema();
-			vote = new Vote(logger, schema);
-		});
+            expect(result).to.be.deep.equal({
+                fields: instance.dbFields,
+                table : instance.dbTable,
+                values: {
+                    transactionId: tx.id,
+                    votes        : null,
+                },
+            });
+        });
+    });
 
-		it('Fail 1: if trs.asset is undefined', function () {
-			trs = { asset: undefined };
-			execMethod = function () {
-				vote.objectNormalize(trs);
-			};
-			expect(execMethod).to.throw(
-				'Expected type object but found type undefined'
-			);
-		});
+    describe("assertValidVote()", () => {
+        let vote;
 
-		it('Fail 2: if trs.asset.votes is undefined', function () {
-			trs = { asset: { votes: undefined } };
-			execMethod = function () {
-				vote.objectNormalize(trs);
-			};
-			expect(execMethod).to.throw('Missing required property: votes');
-		});
+        beforeEach(() => {
+            vote = "+123";
 
-		it('Fail 3: if trs.asset.votes is null', function () {
-			trs = { asset: { votes: null } };
-			execMethod = function () {
-				vote.objectNormalize(trs);
-			};
-			expect(execMethod).to.throw('Expected type array but found type null');
-		});
+            library.schema.validate.returns(true);
+        });
 
-		it('Fail 4: if trs.asset.votes is an empty Array', function () {
-			trs = { asset: { votes: [] } };
-			execMethod = function () {
-				vote.objectNormalize(trs);
-			};
-			expect(execMethod).to.throw('Array is too short');
-		});
+        it("invalid vote type", () => {
+            vote = null;
+            expect(() => instance.assertValidVote(vote)).to.throw("Invalid vote type");
+        });
 
-		it('Fail 5: if trs.asset.votes has duplicates', function () {
-			trs = {
-				asset: {
-					votes: [
-						'+37b6d3fc89fb418fa5e3799e760cc2b1733a567daebb08a531d3d7e8b24f2d22',
-						'+37b6d3fc89fb418fa5e3799e760cc2b1733a567daebb08a531d3d7e8b24f2d22'
-					]
-				}
-			};
-			execMethod = function () {
-				vote.objectNormalize(trs);
-			};
-			expect(execMethod).to.throw('Array items are not unique');
-		});
+        it("invalid vote format", () => {
+            vote = "123";
+            expect(() => instance.assertValidVote(vote)).to.throw("Invalid vote format");
+        });
 
-		it('Fail 6: if trs.asset.votes is greater than constants.maxVotesPerTransaction', function () {
-			trs = { asset: { votes: [] } };
-			for (var i = 0; i <= constants.maxVotesPerTransaction; i++) {
-				trs.asset.votes.push(
-					'+' +
-						crypto
-							.createHash('sha256')
-							.update(i.toString(), 'utf8')
-							.digest('hex')
-				);
-			}
-			execMethod = function () {
-				vote.objectNormalize(trs);
-			};
-			expect(execMethod).to.throw('Array is too long');
-		});
+        it("library.schema.validate should be called", () => {
+            instance.assertValidVote(vote);
 
-		it('Fail 7: if trs.asset has additional properties', function () {
-			trs = {
-				asset: {
-					votes: [
-						'+37b6d3fc89fb418fa5e3799e760cc2b1733a567daebb08a531d3d7e8b24f2d22'
-					],
-					foo: {}
-				}
-			};
-			execMethod = function () {
-				vote.objectNormalize(trs);
-			};
-			expect(execMethod).to.throw('Additional properties not allowed');
-		});
+            expect(library.schema.validate.calledOnce).to.be.true;
+            expect(library.schema.validate.firstCall.args.length).to.be.equal(2);
+            expect(library.schema.validate.firstCall.args[0]).to.be.equal("123");
+            expect(library.schema.validate.firstCall.args[1]).to.be.deep.equal({ format : "publicKey" });
+        });
 
-		it('Fail 8: if trs.asset.votes items has a wrong format', function () {
-			trs = { asset: { votes: [123, 'abc'] } };
-			execMethod = function () {
-				vote.objectNormalize(trs);
-			};
-			expect(execMethod).to.throw('String does not match pattern');
-			expect(execMethod).to.throw(
-				'Expected type string but found type integer'
-			);
-		});
+        it("invalid vote public key", () => {
+            library.schema.validate.returns(false);
+            expect(() => instance.assertValidVote(vote)).to.throw("Invalid vote publicKey");
+        });
 
-		it('success', function () {
-			trs = {
-				asset: {
-					votes: [
-						'+37b6d3fc89fb418fa5e3799e760cc2b1733a567daebb08a531d3d7e8b24f2d22',
-						'-6d1103674f29502c873de14e48e9e432ec6cf6db76272c7b0dad186bb92c9a9a'
-					]
-				}
-			};
-			var result = vote.objectNormalize(trs);
-			expect(result).to.deep.equal(trs);
-		});
-	});
-
-	describe('dbRead()', function () {
-		var raw, result, vote;
-
-		beforeEach(function () {
-			vote = new Vote();
-		});
-
-		it('Fail 1: If v_votes is undefined', function () {
-			raw = { v_votes: undefined };
-			result = vote.dbRead(raw);
-			expect(result).to.equals(null);
-		});
-
-		it('Fail 2: If v_votes is null', function () {
-			raw = { v_votes: null };
-			result = vote.dbRead(raw);
-			expect(result).to.equals(null);
-		});
-
-		it('Fail 3: If v_votes is false', function () {
-			raw = { v_votes: false };
-			result = vote.dbRead(raw);
-			expect(result).to.equals(null);
-		});
-
-		it('Fail 4: If v_votes is an empty string', function () {
-			raw = { v_votes: '' };
-			result = vote.dbRead(raw);
-			expect(result).to.equals(null);
-		});
-
-		it('Fail 5: If v_votes is not a string', function () {
-			raw = { v_votes: [] };
-      throwError = function () {
-        vote.dbRead(raw);
-      };
-			expect(throwError).to.throws();
-		});
-
-		it('success', function () {
-			raw = { v_votes: '1,3,4' };
-			result = vote.dbRead(raw);
-			expect(result).to.have.deep.property('votes');
-			expect(result).to.deep.equal({ votes: ['1', '3', '4'] });
-		});
-	});
-
-	describe('dbSave()', function () {
-		it('If trs.asset.votes is an Array', function () {
-			var trs = { id: 123, asset: { votes: [1, 2, 3] } };
-			var vote = new Vote();
-			var result = vote.dbSave(trs);
-			expect(result).to.deep.equal({
-				table: 'votes',
-				fields: ['votes', 'transactionId'],
-				values: { votes: '1,2,3', transactionId: 123 }
-			});
-		});
-
-		it('If trs.asset.votes is not an Array', function () {
-			var trs = { id: 123, asset: { votes: 'foo' } };
-			var vote = new Vote();
-			var result = vote.dbSave(trs);
-			expect(result).to.deep.equal({
-				table: 'votes',
-				fields: ['votes', 'transactionId'],
-				values: { votes: null, transactionId: 123 }
-			});
-		});
-	});
-
-	describe('ready()', function () {
-		var trs, trs_b, sender, result, vote;
-
-		beforeEach(function () {
-			vote = new Vote();
-		});
-
-		it('Case 1: If sender.multisignatures is not an Array', function () {
-			sender = { multisignatures: undefined };
-			trs = {};
-			result = vote.ready(trs, sender);
-			expect(result).to.equals(true);
-		});
-
-		it('Case 2: If sender.multisignatures is an empty Array', function () {
-			sender = { multisignatures: [] };
-			trs = {};
-			result = vote.ready(trs, sender);
-			expect(result).to.equals(true);
-		});
-
-		it('Case 3: If trs.signatures is not an Array', function () {
-			sender = { multisignatures: [1, 2, 3] };
-			trs = {};
-			result = vote.ready(trs, sender);
-			expect(result).to.equals(false);
-		});
-
-		it('Case 4: If trs.signatures greater or equal than sender.multimin', function () {
-			sender = { multisignatures: [1, 2, 3], multimin: 2 };
-			trs = { signatures: [1, 2, 3] };
-			trs_b = { signatures: [1, 2] };
-			result = vote.ready(trs, sender);
-			var result_b = vote.ready(trs_b, sender);
-			expect(result).to.equals(true);
-			expect(result_b).to.equals(true);
-		});
-
-		it('Case 5: If trs.signatures less than sender.multimin', function () {
-			sender = { multisignatures: [1, 2, 3], multimin: 2 };
-			trs = { signatures: [1] };
-			result = vote.ready(trs, sender);
-			expect(result).to.equals(false);
-		});
-	});
+        it("should not throw error", () => {
+            expect(() => instance.assertValidVote(vote)).to.not.throw();
+        });
+    });
 });

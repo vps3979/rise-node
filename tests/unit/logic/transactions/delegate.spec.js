@@ -4,7 +4,7 @@ var sinon = require("sinon");
 var rewire = require("rewire");
 var path = require("path");
 
-var rootDir = path.join(__dirname, "../../../src");
+var rootDir = path.join(__dirname, "../../../../src");
 
 var DelegateModule = rewire(path.join(rootDir, "logic/transactions/delegate"));
 var Delegate = DelegateModule.RegisterDelegateTransaction;
