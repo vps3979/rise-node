@@ -19,7 +19,7 @@ export type MultisigAsset = {
 export class MultiSignatureTransaction extends BaseTransactionType<MultisigAsset> {
 
   public modules: { accounts: AccountsModule, rounds: RoundsModule, sharedApi: any, system: SystemModule };
-  private unconfirmedSignatures: { [name: string]: true };
+    private unconfirmedSignatures: { [name: string]: true } = {};
   private dbTable  = 'multisignatures';
   private dbFields = [
     'min',
@@ -104,8 +104,8 @@ export class MultiSignatureTransaction extends BaseTransactionType<MultisigAsset
         let valid = false;
         if (Array.isArray(tx.signatures)) {
           for (let i = 0; i < tx.signatures.length && !valid; i++) {
-            if (key[0] === '-' || key === '-') {
-              valid = this.library.transaction.verifySignature(tx, key.substring(1), tx.signature[i]);
+            if (key[0] === '-' || key[0] === '+') {
+              valid = this.library.transaction.verifySignature(tx, key.substring(1), tx.signatures[i]);
             }
           }
         }
