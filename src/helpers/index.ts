@@ -7,11 +7,13 @@ import * as Diff from './diff';
 import loggerCreator from './logger';
 import applyExpressLimits from './request-limiter';
 
+export * from './blocksProgressLogger';
 export * from './bus';
 export * from './checkIpInList';
 export * from './ed';
 export * from './httpApi';
 export * from './forkTypes';
+export * from './exceptionManager';
 export * from './genericUtils';
 export * from './git';
 export * from './inserts';

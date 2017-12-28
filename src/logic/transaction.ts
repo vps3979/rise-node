@@ -1,26 +1,25 @@
-import {BigNumber} from 'bignumber.js';
+import { BigNumber } from 'bignumber.js';
 import * as ByteBuffer from 'bytebuffer';
 import * as crypto from 'crypto';
+import { inject, injectable } from 'inversify';
 import z_schema from 'z-schema';
-import sql from '../../sql/logic/transactions';
-import {BigNum, constants, Ed, emptyCB, IKeypair, ILogger, Slots, TransactionType} from '../helpers/';
-import {RoundsModule} from '../modules/';
+import {
+  BigNum, constants, Ed, emptyCB, ExceptionsList, ExceptionsManager, IKeypair, ILogger,
+  Slots
+} from '../helpers/';
+import { RunThroughExceptions } from '../helpers/decorators/exceptions';
+import { IAccountLogic, IRoundsLogic, ITransactionLogic } from '../ioc/interfaces/logic/';
 import txSchema from '../schema/logic/transaction';
-import {AccountLogic, MemAccountsData} from './account';
+import sql from '../sql/logic/transactions';
+import { MemAccountsData } from './account';
 import { SignedAndChainedBlockType, SignedBlockType } from './block';
-import {BaseTransactionType, IBaseTransaction, IConfirmedTransaction} from './transactions/';
+import { BaseTransactionType, IBaseTransaction, IConfirmedTransaction } from './transactions/';
 
-// tslint:disable-next-line
-export type TransactionLogicScope = {
-  db: any,
-  ed: Ed,
-  schema: z_schema,
-  genesisblock: SignedAndChainedBlockType,
-  account: AccountLogic,
-  logger: ILogger
-};
+import { IDatabase } from 'pg-promise';
+import { Symbols } from '../ioc/symbols';
 
-export class TransactionLogic {
+@injectable()
+export class TransactionLogic implements ITransactionLogic {
   public dbTable  = 'trs';
   public dbFields = [
     'id',
@@ -38,22 +37,41 @@ export class TransactionLogic {
     'signatures',
   ];
 
-  public modules: { rounds: RoundsModule };
-
   private types: { [k: number]: BaseTransactionType<any> } = {};
 
-  constructor(public scope: TransactionLogicScope) {
-  }
+  @inject(Symbols.generic.db)
+  private db: IDatabase<any>;
 
-  public bindModules(modules: { rounds: any }) {
-    this.modules = modules;
-  }
+  @inject(Symbols.helpers.ed)
+  private ed: Ed;
 
-  public attachAssetType<K, T extends BaseTransactionType<K>>(type: TransactionType, instance: T): T {
+  @inject(Symbols.helpers.slots)
+  private slots: Slots;
+
+  @inject(Symbols.generic.zschema)
+  private schema: z_schema;
+
+  @inject(Symbols.generic.genesisBlock)
+  private genesisBlock: SignedAndChainedBlockType;
+
+  @inject(Symbols.logic.account)
+  private accountLogic: IAccountLogic;
+
+  @inject(Symbols.logic.rounds)
+  private roundsLogic: IRoundsLogic;
+
+  @inject(Symbols.helpers.logger)
+  private logger: ILogger;
+
+  // tslint:disable-next-line member-ordering
+  @inject(Symbols.helpers.exceptionsManager)
+  public excManager: ExceptionsManager;
+
+  public attachAssetType<K>(instance: BaseTransactionType<K>): BaseTransactionType<K> {
     if (!(instance instanceof BaseTransactionType)) {
       throw new Error('Invalid instance interface');
     }
-    this.types[type] = instance;
+    this.types[instance.type] = instance;
     return instance;
   }
 
@@ -63,7 +81,7 @@ export class TransactionLogic {
    */
   public sign(keypair: IKeypair, tx: IBaseTransaction<any>) {
     const hash = this.getHash(tx);
-    return this.scope.ed.sign(hash, keypair).toString('hex');
+    return this.ed.sign(hash, keypair).toString('hex');
   }
 
   /**
@@ -72,7 +90,7 @@ export class TransactionLogic {
    */
   public multiSign(keypair: IKeypair, tx: IBaseTransaction<any>) {
     const hash = this.getHash(tx, true, true);
-    return this.scope.ed.sign(hash, keypair).toString('hex');
+    return this.ed.sign(hash, keypair).toString('hex');
   }
 
   /**
@@ -195,10 +213,10 @@ export class TransactionLogic {
    */
   public async countById(tx: IBaseTransaction<any>): Promise<number> {
     try {
-      const { count } = await this.scope.db.one(sql.countById, { id: tx.id });
+      const { count } = await this.db.one(sql.countById, { id: tx.id });
       return count;
     } catch (e) {
-      this.scope.logger.error(e.stack);
+      this.logger.error(e.stack);
       throw new Error('Transaction#countById error');
     }
   }
@@ -216,16 +234,17 @@ export class TransactionLogic {
   /**
    * Checks if balanceKey is less than amount for sender
    */
+  @RunThroughExceptions(ExceptionsList.checkBalance)
   public checkBalance(amount: number | BigNumber, balanceKey: 'balance' | 'u_balance',
                       tx: IConfirmedTransaction<any> | IBaseTransaction<any>, sender: any) {
     const accountBalanceString  = sender[balanceKey].toString();
     const accountBalance = new BigNum(accountBalanceString);
     const exceededBalance = accountBalance.lessThan(amount);
     // tslint:disable-next-line
-    const exceeded        = (tx['blockId'] !== this.scope.genesisblock.id && exceededBalance);
+    const exceeded        = (tx['blockId'] !== this.genesisBlock.id && exceededBalance);
     return {
       error: exceeded ? `Account does not have enough currency: ${sender.address} balance: ${
-        (accountBalance || new BigNum(0)).div(Math.pow(10, 8))}` : null,
+        new BigNum(accountBalance || 0).div(Math.pow(10, 8))} - ${new BigNum(amount).div(Math.pow(10, 8))}` : null,
       exceeded,
     };
   }
@@ -234,7 +253,8 @@ export class TransactionLogic {
    * Performs some validation on the transaction and calls process
    * to the respective tx type.
    */
-  public async process<T = any>(tx: IBaseTransaction<T>, sender: any, requester: string): Promise<IBaseTransaction<T>> {
+  // tslint:disable-next-line max-line-length
+  public async process<T = any>(tx: IBaseTransaction<T>, sender: MemAccountsData, requester: string): Promise<IBaseTransaction<T>> {
     this.assertKnownTransactionType(tx);
     if (!sender) {
       throw new Error('Missing sender');
@@ -260,7 +280,7 @@ export class TransactionLogic {
     }
 
     if (tx.requesterPublicKey && sender.secondSignature && !tx.signSignature &&
-      (tx as IConfirmedTransaction<any>).blockId !== this.scope.genesisblock.id) {
+      (tx as IConfirmedTransaction<any>).blockId !== this.genesisBlock.id) {
       throw new Error('Missing sender second signature');
     }
 
@@ -285,8 +305,8 @@ export class TransactionLogic {
     }
 
     // Check sender is not genesis account unless block id equals genesis
-    if (this.scope.genesisblock.generatorPublicKey === sender.publicKey
-      && (tx as IConfirmedTransaction<any>).blockId !== this.scope.genesisblock.id) {
+    if (this.genesisBlock.generatorPublicKey === sender.publicKey
+      && (tx as IConfirmedTransaction<any>).blockId !== this.genesisBlock.id) {
       throw new Error('Invalid sender. Can not send from genesis account');
     }
 
@@ -378,7 +398,7 @@ export class TransactionLogic {
     }
 
     // Check timestamp
-    if (Slots.getSlotNumber(tx.timestamp) > Slots.getSlotNumber()) {
+    if (this.slots.getSlotNumber(tx.timestamp) > this.slots.getSlotNumber()) {
       throw new Error('Invalid transaction timestamp. Timestamp is in the future');
     }
 
@@ -401,7 +421,7 @@ export class TransactionLogic {
       return false;
     }
 
-    return this.scope.ed.verify(
+    return this.ed.verify(
       this.getHash(tx, !isSecondSignature, true),
       Buffer.from(signature, 'hex'),
       Buffer.from(publicKey, 'hex')
@@ -421,18 +441,18 @@ export class TransactionLogic {
 
     const amountNumber = amount.toNumber();
 
-    this.scope.logger.trace('Logic/Transaction->apply', {
+    this.logger.trace('Logic/Transaction->apply', {
       balance: -amountNumber,
       blockId: block.id,
-      round  : this.modules.rounds.calcRound(block.height),
+      round  : this.roundsLogic.calcRound(block.height),
       sender : sender.address,
     });
-    await this.scope.account.merge(
+    await this.accountLogic.merge(
       sender.address,
       {
         balance: -amountNumber,
         blockId: block.id,
-        round  : this.modules.rounds.calcRound(block.height),
+        round  : this.roundsLogic.calcRound(block.height),
       } as any, // TODO: round is not defined in typescript definition. Possible bug?
       // tslint:disable-next-line no-empty
       () => {
@@ -443,12 +463,12 @@ export class TransactionLogic {
       await this.types[tx.type].apply(tx, block, sender);
     } catch (e) {
       // Rollback!
-      await this.scope.account.merge(
+      await this.accountLogic.merge(
         sender.address,
         {
           balance: amountNumber,
           blockId: block.id,
-          round  : this.modules.rounds.calcRound(block.height),
+          round  : this.roundsLogic.calcRound(block.height),
         },
         // tslint:disable-next-line no-empty
         () => {
@@ -468,18 +488,18 @@ export class TransactionLogic {
       .plus(tx.fee.toString())
       .toNumber();
 
-    this.scope.logger.trace('Logic/Transaction->undo', {
+    this.logger.trace('Logic/Transaction->undo', {
       balance: amount,
       blockId: block.id,
-      round  : this.modules.rounds.calcRound(block.height),
+      round  : this.roundsLogic.calcRound(block.height),
       sender : sender.address,
     });
-    const mergedSender = await this.scope.account.merge(
+    const mergedSender = await this.accountLogic.merge(
       sender.address,
       {
         balance: amount,
         blockId: block.id,
-        round  : this.modules.rounds.calcRound(block.height),
+        round  : this.roundsLogic.calcRound(block.height),
       },
       emptyCB
     );
@@ -488,12 +508,12 @@ export class TransactionLogic {
       await this.types[tx.type].undo(tx, block, mergedSender);
     } catch (e) {
       // Rollback
-      await this.scope.account.merge(
+      await this.accountLogic.merge(
         sender.address,
         {
           balance: -amount,
           blockId: block.id,
-          round  : this.modules.rounds.calcRound(block.height),
+          round  : this.roundsLogic.calcRound(block.height),
         },
         emptyCB
       );
@@ -511,7 +531,7 @@ export class TransactionLogic {
 
     const amountNumber = amount.toNumber();
 
-    await this.scope.account.merge(
+    await this.accountLogic.merge(
       sender.address,
       { u_balance: -amountNumber },
       emptyCB
@@ -520,7 +540,7 @@ export class TransactionLogic {
       await this.types[tx.type].applyUnconfirmed(tx, sender);
     } catch (e) {
       // RollBack
-      await this.scope.account.merge(
+      await this.accountLogic.merge(
         sender.address,
         { u_balance: amountNumber },
         emptyCB
@@ -538,7 +558,7 @@ export class TransactionLogic {
       .plus(tx.fee.toString())
       .toNumber();
 
-    const mergedSender = await this.scope.account.merge(
+    const mergedSender = await this.accountLogic.merge(
       sender.address,
       { u_balance: amount },
       emptyCB
@@ -548,7 +568,7 @@ export class TransactionLogic {
       await this.types[tx.type].undoUnconfirmed(tx, mergedSender);
     } catch (e) {
       // Rollback
-      await this.scope.account.merge(
+      await this.accountLogic.merge(
         sender.address,
         { u_balance: -amount },
         emptyCB
@@ -612,10 +632,10 @@ export class TransactionLogic {
       }
     }
 
-    const report = this.scope.schema.validate(tx, txSchema);
+    const report = this.schema.validate(tx, txSchema);
 
     if (!report) {
-      throw new Error(`Failed to validate transaction schema: ${this.scope.schema.getLastErrors().map((e) => e.message)
+      throw new Error(`Failed to validate transaction schema: ${this.schema.getLastErrors().map((e) => e.message)
         .join(', ')}`);
     }
 

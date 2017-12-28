@@ -1,34 +1,36 @@
-export type AppConfigDatabase = {
-  host: string,
-  port: number,
-  database: string,
-  user: string,
-  password: string,
-  poolSize: number
-  poolIdleTimeout: number,
-  reapIntervalMillis: number,
-  logEvents: string[]
-};
+// tslint:disable-next-line interface-name
+export interface AppConfigDatabase {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  poolSize: number;
+  poolIdleTimeout: number;
+  reapIntervalMillis: number;
+  logEvents: string[];
+}
 
-export type AppConfig = {
-  port: number,
-  address: string,
-  version: string,
-  minVersion: string,
-  fileLogLevel: string,
-  consoleLogLevel: string,
-  logFileName: string,
-  trustProxy: boolean
-  topAccounts: boolean,
-  cacheEnabled: boolean,
-  db: AppConfigDatabase,
+// tslint:disable-next-line interface-name
+export interface AppConfig {
+  port: number;
+  address: string;
+  version: string;
+  minVersion: string;
+  fileLogLevel: string;
+  consoleLogLevel: string;
+  logFileName: string;
+  trustProxy: boolean;
+  topAccounts: boolean;
+  cacheEnabled: boolean;
+  db: AppConfigDatabase;
 
   redis: {
     host: string,
     port: number,
     db: number,
     password: string;
-  }
+  };
 
   api: {
     enabled: boolean;
@@ -44,7 +46,7 @@ export type AppConfig = {
         windowMs: number,
       }
     }
-  },
+  };
 
   peers: {
     enabled: boolean;
@@ -64,7 +66,7 @@ export type AppConfig = {
       },
       timeout: number
     }
-  },
+  };
 
   broadcasts: {
     broadcastInterval: number
@@ -72,11 +74,11 @@ export type AppConfig = {
     parallelLimit: number
     releaseLimit: number
     relayLimit: number
-  },
+  };
 
   transactions: {
     maxTxsPerQueue: number
-  },
+  };
 
   forging: {
     force: boolean,
@@ -84,16 +86,27 @@ export type AppConfig = {
     access: {
       whiteList: string[]
     }
-  },
+  };
 
   loading: {
     verifyOnLoading: false,
     snapshot?: number,
     loadPerIteration: number,
-  },
+  };
 
-  ssl: any,
+  ssl: any;
 
-  dapp: any,
-  nethash: string
-};
+  dapp: any;
+  nethash: string;
+}
+
+// tslint:disable-next-line interface-name
+export interface PeerHeaders {
+  os: string;
+  version: string;
+  port: number;
+  height: number;
+  nethash: string;
+  broadhash: string;
+  nonce: string;
+}
