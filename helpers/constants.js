@@ -41,7 +41,7 @@
  * @property {number} unconfirmedTransactionTimeOut - 1080 blocks
  */
 module.exports = {
-	currentVersion: "0.1.2",
+	currentVersion: "0.1.3",
 	minVersion: [
 		{ height: 1,       ver: "^0.1.0"},
 		{ height: 241000,  ver: "^0.1.1"}
@@ -50,7 +50,8 @@ module.exports = {
 	maximumVotes: 1,
 	addressLength: 208,
 	blockHeaderLength: 248,
-	blockTime: 30000,
+  blockSlotWindow: 5, // window of which a slot could be accepted.
+  blockTime: 30000,
 	blockReceiptTimeOut: 30*2, // 2 blocks
 	confirmationLength: 77,
 	epochTime: new Date(Date.UTC(2016, 4, 24, 17, 0, 0, 0)),
